@@ -14,10 +14,10 @@ fn jfa_mask(
     let mask = textureLoad(mask_texture, base_coordinates, 0).r;
 
     if mask == 1u {
-        textureStore(jfa_texture, base_coordinates, vec4<u32>(base_coordinates, 0u, 0u));
+        textureStore(jfa_texture, base_coordinates, vec4<u32>(base_coordinates, 0, 0));
     } else {
         // Set to a far distance
         let far_coordinate = textureDimensions(jfa_texture) * 3u;
-        textureStore(jfa_texture, base_coordinates, vec4<u32>(far_coordinate, 0u, 0u));
+        textureStore(jfa_texture, base_coordinates, vec4<u32>(far_coordinate, 0, 0));
     }
 }

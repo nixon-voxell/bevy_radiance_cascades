@@ -1,30 +1,27 @@
 use bevy::{
-    core_pipeline::{
-        core_2d::graph::{Core2d, Node2d},
-        fullscreen_vertex_shader::fullscreen_shader_vertex_state,
-    },
+    core_pipeline::core_2d::graph::Core2d,
     ecs::query::QueryItem,
     prelude::*,
     render::{
-        camera::ExtractedCamera,
         extract_component::{ExtractComponent, ExtractComponentPlugin},
         render_graph::{
             NodeRunError, RenderGraphApp, RenderGraphContext, RenderLabel, ViewNode, ViewNodeRunner,
         },
         render_resource::{
-            binding_types::{texture_2d, texture_storage_2d},
+            binding_types::{texture_2d, texture_storage_2d, uniform_buffer},
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
-            CachedComputePipelineId, CachedRenderPipelineId, ColorTargetState, ColorWrites,
-            ComputePassDescriptor, ComputePipelineDescriptor, FragmentState, PipelineCache,
-            RenderPipelineDescriptor, ShaderStages, StorageTextureAccess, TextureDescriptor,
-            TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
+            CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor,
+            DynamicUniformBuffer, PipelineCache, ShaderStages, StorageTextureAccess,
+            TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
         },
-        renderer::{RenderContext, RenderDevice},
+        renderer::{RenderContext, RenderDevice, RenderQueue},
         texture::{CachedTexture, TextureCache},
         view::ViewTarget,
         Render, RenderApp, RenderSet,
     },
 };
+
+const MAX_ITER: usize = 16;
 
 pub struct JfaPrepassPlugin;
 
@@ -38,14 +35,7 @@ impl Plugin for JfaPrepassPlugin {
 
         render_app
             .add_render_graph_node::<ViewNodeRunner<JfaPrepassNode>>(Core2d, JfaPrepassLabel)
-            .add_render_graph_edges(
-                Core2d,
-                (
-                    Node2d::MainTransparentPass,
-                    JfaPrepassLabel,
-                    Node2d::EndMainPass,
-                ),
-            )
+            .add_render_graph_edges(Core2d, (crate::mask2d::Mask2dPrepassLabel, JfaPrepassLabel))
             .add_systems(
                 Render,
                 (
@@ -75,7 +65,7 @@ pub struct JfaPrepass;
 pub struct JfaPrepassNode;
 
 impl ViewNode for JfaPrepassNode {
-    type ViewQuery = (&'static ViewTarget, &'static JfaPrepassBindGroup);
+    type ViewQuery = (&'static ViewTarget, &'static JfaPrepassBindGroups);
 
     fn run(
         &self,
@@ -84,13 +74,14 @@ impl ViewNode for JfaPrepassNode {
         (view, bind_groups): QueryItem<Self::ViewQuery>,
         world: &World,
     ) -> Result<(), NodeRunError> {
-        let jfa_pipeline = world.resource::<JfaPrepassPipeline>();
+        let pipeline = world.resource::<JfaPrepassPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
         // Get the pipeline from the cache
-        let Some(mask_pipeline) =
-            pipeline_cache.get_compute_pipeline(jfa_pipeline.jfa_mask_pipeline)
-        else {
+        let (Some(jfa_mask_pipeline), Some(jfa_pipeline)) = (
+            pipeline_cache.get_compute_pipeline(pipeline.jfa_mask_pipeline),
+            pipeline_cache.get_compute_pipeline(pipeline.jfa_pipeline),
+        ) else {
             return Ok(());
         };
 
@@ -98,9 +89,13 @@ impl ViewNode for JfaPrepassNode {
             .command_encoder()
             .push_debug_group("jfa_pass");
 
+        let size = view.main_texture().size();
+        let workgroup_size =
+            batch_count(UVec3::new(size.width, size.height, 1), UVec3::new(8, 8, 1));
+
         {
             // Jfa mask
-            let mut mask_compute_pass =
+            let mut jfa_mask_compute_pass =
                 render_context
                     .command_encoder()
                     .begin_compute_pass(&ComputePassDescriptor {
@@ -108,10 +103,51 @@ impl ViewNode for JfaPrepassNode {
                         timestamp_writes: None,
                     });
 
-            mask_compute_pass.set_pipeline(mask_pipeline);
-            mask_compute_pass.set_bind_group(0, &bind_groups.mask_bind_group, &[]);
-            let size = view.main_texture().size();
-            mask_compute_pass.dispatch_workgroups(size.width / 8 + 1, size.height / 8 + 1, 1);
+            jfa_mask_compute_pass.set_pipeline(jfa_mask_pipeline);
+            jfa_mask_compute_pass.set_bind_group(0, &bind_groups.jfa_mask_bind_group, &[]);
+            jfa_mask_compute_pass.dispatch_workgroups(
+                workgroup_size.x,
+                workgroup_size.y,
+                workgroup_size.z,
+            );
+        }
+
+        {
+            //Jfa
+            let mut jfa_compute_pass =
+                render_context
+                    .command_encoder()
+                    .begin_compute_pass(&ComputePassDescriptor {
+                        label: Some("jfa_pass"),
+                        timestamp_writes: None,
+                    });
+
+            jfa_compute_pass.set_pipeline(jfa_pipeline);
+
+            let mut iter_count = fast_ceil_log2(u32::max(size.width, size.height)) as usize;
+            iter_count = usize::min(iter_count, MAX_ITER);
+            for i in 0..iter_count {
+                let offset_index = iter_count - i - 1;
+                // Set bind groups
+                match i % 2 == 0 {
+                    true => jfa_compute_pass.set_bind_group(
+                        0,
+                        &bind_groups.jfa_01_bind_group,
+                        &[pipeline.jfa_step_size_buffer_offsets[offset_index]],
+                    ),
+                    false => jfa_compute_pass.set_bind_group(
+                        0,
+                        &bind_groups.jfa_10_bind_group,
+                        &[pipeline.jfa_step_size_buffer_offsets[offset_index]],
+                    ),
+                }
+                // Run compute shader
+                jfa_compute_pass.dispatch_workgroups(
+                    workgroup_size.x,
+                    workgroup_size.y,
+                    workgroup_size.z,
+                );
+            }
         }
 
         render_context.command_encoder().pop_debug_group();
@@ -124,22 +160,16 @@ impl ViewNode for JfaPrepassNode {
 pub struct JfaPrepassTextures {
     jfa_texture0: CachedTexture,
     jfa_texture1: CachedTexture,
-    flip: bool,
+    is_texture0: bool,
 }
 
 impl JfaPrepassTextures {
     const JFA_FORMAT: TextureFormat = TextureFormat::Rg16Uint;
 
-    pub fn flip_jfa(&mut self) -> (&CachedTexture, &CachedTexture) {
-        self.flip = !self.flip;
-        match self.flip {
-            true => (&self.jfa_texture0, &self.jfa_texture1),
-            false => (&self.jfa_texture1, &self.jfa_texture0),
-        }
-    }
-
+    /// Access the [`CachedTexture`] that is last written to
+    /// based on the [flip][JfaPrepassTextures::flip] boolean.
     pub fn main_texture(&self) -> &CachedTexture {
-        match self.flip {
+        match self.is_texture0 {
             true => &self.jfa_texture0,
             false => &self.jfa_texture1,
         }
@@ -151,15 +181,30 @@ struct JfaPrepassPipeline {
     jfa_mask_bind_group_layout: BindGroupLayout,
     jfa_bind_group_layout: BindGroupLayout,
     jfa_mask_pipeline: CachedComputePipelineId,
+    jfa_pipeline: CachedComputePipelineId,
+    jfa_step_size_buffers: DynamicUniformBuffer<i32>,
+    jfa_step_size_buffer_offsets: Vec<u32>,
 }
 
 impl FromWorld for JfaPrepassPipeline {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.resource::<RenderDevice>();
+        let render_queue = world.resource::<RenderQueue>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
         // Shader
-        let mask2d_shader = world.load_asset("shaders/jfa_mask.wgsl");
+        let jfa_mask_shader = world.load_asset("shaders/jfa_mask.wgsl");
+        let jfa_shader = world.load_asset("shaders/jfa.wgsl");
+
+        let mut jfa_step_size_buffers = DynamicUniformBuffer::default();
+        let mut jfa_step_size_buffer_offsets = Vec::with_capacity(MAX_ITER);
+        for i in 0..MAX_ITER {
+            let step_size: i32 = 1 << i;
+            let offset = jfa_step_size_buffers.push(&step_size);
+            jfa_step_size_buffer_offsets.push(offset);
+        }
+
+        jfa_step_size_buffers.write_buffer(render_device, render_queue);
 
         // Bind group layout
         let jfa_mask_bind_group_layout = render_device.create_bind_group_layout(
@@ -180,10 +225,11 @@ impl FromWorld for JfaPrepassPipeline {
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
+                    uniform_buffer::<u32>(true),
                     // Jfa texture source
                     texture_2d(TextureSampleType::Uint),
                     // Jfa texture destination
-                    texture_2d(TextureSampleType::Uint),
+                    texture_storage_2d(TextureFormat::Rg16Uint, StorageTextureAccess::WriteOnly),
                 ),
             ),
         );
@@ -192,9 +238,18 @@ impl FromWorld for JfaPrepassPipeline {
         let jfa_mask_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some("jfa_mask_pipeline".into()),
             layout: vec![jfa_mask_bind_group_layout.clone()],
-            shader: mask2d_shader,
+            shader: jfa_mask_shader,
             shader_defs: vec![],
             entry_point: "jfa_mask".into(),
+            push_constant_ranges: vec![],
+        });
+
+        let jfa_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+            label: Some("jfa_pipeline".into()),
+            layout: vec![jfa_bind_group_layout.clone()],
+            shader: jfa_shader,
+            shader_defs: vec![],
+            entry_point: "jfa".into(),
             push_constant_ranges: vec![],
         });
 
@@ -202,14 +257,18 @@ impl FromWorld for JfaPrepassPipeline {
             jfa_mask_bind_group_layout,
             jfa_bind_group_layout,
             jfa_mask_pipeline,
+            jfa_pipeline,
+            jfa_step_size_buffers,
+            jfa_step_size_buffer_offsets,
         }
     }
 }
 
 #[derive(Component)]
-pub struct JfaPrepassBindGroup {
-    mask_bind_group: BindGroup,
-    jfa_bind_group: BindGroup,
+pub struct JfaPrepassBindGroups {
+    jfa_mask_bind_group: BindGroup,
+    jfa_01_bind_group: BindGroup,
+    jfa_10_bind_group: BindGroup,
 }
 
 fn prepare_jfa_textures(
@@ -233,48 +292,73 @@ fn prepare_jfa_textures(
             view_formats: &[],
         };
 
-        let jfa_texture0 = texture_cache.get(&render_device, jfa_tex_desc("jfa_0_texture"));
-        let jfa_texture1 = texture_cache.get(&render_device, jfa_tex_desc("jfa_1_texture"));
+        let jfa_texture0 = texture_cache.get(&render_device, jfa_tex_desc("jfa_0_prepass_texture"));
+        let jfa_texture1 = texture_cache.get(&render_device, jfa_tex_desc("jfa_1_prepass_texture"));
 
+        let iter_count = fast_ceil_log2(u32::max(size.width, size.height));
         commands.entity(entity).insert(JfaPrepassTextures {
             jfa_texture0,
             jfa_texture1,
-            flip: false,
+            is_texture0: iter_count % 2 == 0,
         });
     }
 }
 
 fn prepare_jfa_bind_groups(
     mut commands: Commands,
-    mut q_views: Query<(
+    q_views: Query<(
         Entity,
         &crate::mask2d::Mask2dPrepassTexture,
-        &mut JfaPrepassTextures,
+        &JfaPrepassTextures,
     )>,
     render_device: Res<RenderDevice>,
-    pipelines: Res<JfaPrepassPipeline>,
+    pipeline: Res<JfaPrepassPipeline>,
 ) {
-    for (entity, mask_texture, mut jfa_textures) in q_views.iter_mut() {
-        let (jfa_tex_0, jfa_tex_1) = jfa_textures.flip_jfa();
-
-        let mask_bind_group = render_device.create_bind_group(
+    for (entity, mask_texture, jfa_textures) in q_views.iter() {
+        let jfa_mask_bind_group = render_device.create_bind_group(
             "jfa_mask_bind_group",
-            &pipelines.jfa_mask_bind_group_layout,
+            &pipeline.jfa_mask_bind_group_layout,
             &BindGroupEntries::sequential((
                 &mask_texture.get().default_view,
-                &jfa_tex_0.default_view,
+                &jfa_textures.jfa_texture0.default_view,
             )),
         );
 
-        let jfa_bind_group = render_device.create_bind_group(
-            "jfa_bind_group",
-            &pipelines.jfa_bind_group_layout,
-            &BindGroupEntries::sequential((&jfa_tex_0.default_view, &jfa_tex_1.default_view)),
+        let jfa_01_bind_group = render_device.create_bind_group(
+            "jfa_01_bind_group",
+            &pipeline.jfa_bind_group_layout,
+            &BindGroupEntries::sequential((
+                pipeline.jfa_step_size_buffers.binding().unwrap(),
+                &jfa_textures.jfa_texture0.default_view,
+                &jfa_textures.jfa_texture1.default_view,
+            )),
         );
 
-        commands.entity(entity).insert(JfaPrepassBindGroup {
-            mask_bind_group,
-            jfa_bind_group,
+        let jfa_10_bind_group = render_device.create_bind_group(
+            "jfa_10_bind_group",
+            &pipeline.jfa_bind_group_layout,
+            &BindGroupEntries::sequential((
+                pipeline.jfa_step_size_buffers.binding().unwrap(),
+                &jfa_textures.jfa_texture1.default_view,
+                &jfa_textures.jfa_texture0.default_view,
+            )),
+        );
+
+        commands.entity(entity).insert(JfaPrepassBindGroups {
+            jfa_mask_bind_group,
+            jfa_01_bind_group,
+            jfa_10_bind_group,
         });
     }
+}
+
+pub fn batch_count(length: UVec3, batch_size: UVec3) -> UVec3 {
+    (length + batch_size - 1) / batch_size
+}
+
+/// Fast log2 ceil based on:
+///
+/// https://stackoverflow.com/questions/72251467/computing-ceil-of-log2-in-rust
+pub fn fast_ceil_log2(number: u32) -> u32 {
+    u32::BITS - u32::leading_zeros(number)
 }
