@@ -63,7 +63,10 @@ struct DebugRenderPipelineLabel;
 pub struct DebugRenderPipelineNode;
 
 impl ViewNode for DebugRenderPipelineNode {
-    type ViewQuery = (&'static ViewTarget, &'static crate::jfa::JfaPrepassTextures);
+    type ViewQuery = (
+        &'static ViewTarget,
+        &'static crate::radiance_cascades::RadianceCascadesTextures,
+    );
 
     fn run<'w>(
         &self,
@@ -102,7 +105,7 @@ impl ViewNode for DebugRenderPipelineNode {
             // It's important for this to match the BindGroupLayout defined in the PostProcessPipeline
             &BindGroupEntries::single(
                 // Make sure to use the source view
-                &debug_texture.main_texture().default_view,
+                &debug_texture.dist_field_texture.default_view,
             ),
         );
 
@@ -152,7 +155,7 @@ impl FromWorld for DebugRenderPipeline {
                 // The layout entries will only be visible in the fragment stage
                 ShaderStages::FRAGMENT,
                 // The screen texture
-                texture_2d(TextureSampleType::Uint {}),
+                texture_2d(TextureSampleType::Float { filterable: true }),
             ),
         );
 

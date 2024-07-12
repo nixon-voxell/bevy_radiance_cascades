@@ -1,5 +1,3 @@
-#import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
-
 @group(0) @binding(0) var mask_texture: texture_2d<u32>;
 @group(0) @binding(1) var jfa_texture: texture_storage_2d<rg16uint, write>;
 

@@ -7,12 +7,15 @@ use bevy::{
 mod debug_render_pipeline;
 mod jfa;
 mod mask2d;
+mod math_util;
+mod radiance_cascades;
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(mask2d::Mask2dPrepassPlugin::<ColorMaterial>::default())
         .add_plugins(jfa::JfaPrepassPlugin)
+        .add_plugins(radiance_cascades::RadianceCascadesPlugin)
         .add_plugins(debug_render_pipeline::DebugRenderPipelinePlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, animate)
@@ -43,6 +46,7 @@ fn setup(
         SmaaSettings::default(),
         jfa::JfaPrepass,
         mask2d::Mask2dPrepass,
+        radiance_cascades::RadianceCascades,
     ));
 
     // rect
@@ -63,8 +67,8 @@ fn setup(
             transform: Transform::from_xyz(0.0, 0.0, 0.1),
             ..default()
         })
-        .insert(mask2d::Mask2d)
-        .insert(Marked);
+        // .insert(Marked)
+        .insert(mask2d::Mask2d);
 }
 
 fn animate(mut q_marked: Query<&mut Transform, With<Marked>>, time: Res<Time>) {

@@ -21,6 +21,8 @@ use bevy::{
     },
 };
 
+use crate::math_util::{batch_count, fast_log2_ceil};
+
 const MAX_ITER: usize = 16;
 
 pub struct JfaPrepassPlugin;
@@ -124,7 +126,7 @@ impl ViewNode for JfaPrepassNode {
 
             jfa_compute_pass.set_pipeline(jfa_pipeline);
 
-            let mut iter_count = fast_ceil_log2(u32::max(size.width, size.height)) as usize;
+            let mut iter_count = fast_log2_ceil(u32::max(size.width, size.height)) as usize;
             iter_count = usize::min(iter_count, MAX_ITER);
             for i in 0..iter_count {
                 let offset_index = iter_count - i - 1;
@@ -156,26 +158,6 @@ impl ViewNode for JfaPrepassNode {
     }
 }
 
-#[derive(Component)]
-pub struct JfaPrepassTextures {
-    jfa_texture0: CachedTexture,
-    jfa_texture1: CachedTexture,
-    is_texture0: bool,
-}
-
-impl JfaPrepassTextures {
-    const JFA_FORMAT: TextureFormat = TextureFormat::Rg16Uint;
-
-    /// Access the [`CachedTexture`] that is last written to
-    /// based on the [flip][JfaPrepassTextures::flip] boolean.
-    pub fn main_texture(&self) -> &CachedTexture {
-        match self.is_texture0 {
-            true => &self.jfa_texture0,
-            false => &self.jfa_texture1,
-        }
-    }
-}
-
 #[derive(Resource)]
 struct JfaPrepassPipeline {
     jfa_mask_bind_group_layout: BindGroupLayout,
@@ -199,7 +181,7 @@ impl FromWorld for JfaPrepassPipeline {
         let mut jfa_step_size_buffers = DynamicUniformBuffer::default();
         let mut jfa_step_size_buffer_offsets = Vec::with_capacity(MAX_ITER);
         for i in 0..MAX_ITER {
-            let step_size: i32 = 1 << i;
+            let step_size = 1 << i;
             let offset = jfa_step_size_buffers.push(&step_size);
             jfa_step_size_buffer_offsets.push(offset);
         }
@@ -215,7 +197,10 @@ impl FromWorld for JfaPrepassPipeline {
                     // Mask texture
                     texture_2d(TextureSampleType::Uint),
                     // Jfa texture
-                    texture_storage_2d(TextureFormat::Rg16Uint, StorageTextureAccess::WriteOnly),
+                    texture_storage_2d(
+                        JfaPrepassTextures::JFA_FORMAT,
+                        StorageTextureAccess::WriteOnly,
+                    ),
                 ),
             ),
         );
@@ -229,7 +214,10 @@ impl FromWorld for JfaPrepassPipeline {
                     // Jfa texture source
                     texture_2d(TextureSampleType::Uint),
                     // Jfa texture destination
-                    texture_storage_2d(TextureFormat::Rg16Uint, StorageTextureAccess::WriteOnly),
+                    texture_storage_2d(
+                        JfaPrepassTextures::JFA_FORMAT,
+                        StorageTextureAccess::WriteOnly,
+                    ),
                 ),
             ),
         );
@@ -265,6 +253,26 @@ impl FromWorld for JfaPrepassPipeline {
 }
 
 #[derive(Component)]
+pub struct JfaPrepassTextures {
+    jfa_texture0: CachedTexture,
+    jfa_texture1: CachedTexture,
+    is_texture0: bool,
+}
+
+impl JfaPrepassTextures {
+    const JFA_FORMAT: TextureFormat = TextureFormat::Rg16Uint;
+
+    /// Access the [`CachedTexture`] that is last written to
+    /// based on the [flip][JfaPrepassTextures::flip] boolean.
+    pub fn main_texture(&self) -> &CachedTexture {
+        match self.is_texture0 {
+            true => &self.jfa_texture0,
+            false => &self.jfa_texture1,
+        }
+    }
+}
+
+#[derive(Component)]
 pub struct JfaPrepassBindGroups {
     jfa_mask_bind_group: BindGroup,
     jfa_01_bind_group: BindGroup,
@@ -295,7 +303,7 @@ fn prepare_jfa_textures(
         let jfa_texture0 = texture_cache.get(&render_device, jfa_tex_desc("jfa_0_prepass_texture"));
         let jfa_texture1 = texture_cache.get(&render_device, jfa_tex_desc("jfa_1_prepass_texture"));
 
-        let iter_count = fast_ceil_log2(u32::max(size.width, size.height));
+        let iter_count = fast_log2_ceil(u32::max(size.width, size.height));
         commands.entity(entity).insert(JfaPrepassTextures {
             jfa_texture0,
             jfa_texture1,
@@ -350,15 +358,4 @@ fn prepare_jfa_bind_groups(
             jfa_10_bind_group,
         });
     }
-}
-
-pub fn batch_count(length: UVec3, batch_size: UVec3) -> UVec3 {
-    (length + batch_size - 1) / batch_size
-}
-
-/// Fast log2 ceil based on:
-///
-/// https://stackoverflow.com/questions/72251467/computing-ceil-of-log2-in-rust
-pub fn fast_ceil_log2(number: u32) -> u32 {
-    u32::BITS - u32::leading_zeros(number)
 }
