@@ -82,7 +82,7 @@ where
 
         render_app
             .add_render_graph_node::<ViewNodeRunner<Mask2dPrepassNode>>(Core2d, Mask2dPrepassLabel)
-            .add_render_graph_edges(Core2d, (Node2d::MainTransparentPass, Mask2dPrepassLabel));
+            .add_render_graph_edges(Core2d, (Mask2dPrepassLabel, Node2d::EndMainPass));
     }
 
     fn finish(&self, app: &mut App) {

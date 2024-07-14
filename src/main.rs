@@ -46,7 +46,7 @@ fn setup(
         SmaaSettings::default(),
         jfa::JfaPrepass,
         mask2d::Mask2dPrepass,
-        radiance_cascades::RadianceCascades,
+        radiance_cascades::RadianceCascadesConfig::default(),
     ));
 
     // rect

@@ -13,6 +13,6 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     let dimensionf = vec2<f32>(dimension);
 
-    return vec4<f32>(main_tex.r/vec2<f32>(dimension).x);
+    return vec4<f32>(main_tex);
     // return vec4<f32>(length(main_tex.rg - tex_coordsf)/vec2<f32>(dimension).x);
 }

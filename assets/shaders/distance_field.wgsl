@@ -1,5 +1,5 @@
-@group(0) @binding(0) var jfa_texture: texture_2d<u32>;
-@group(0) @binding(1) var dist_field_texture: texture_storage_2d<r16float, write>;
+@group(0) @binding(0) var tex_jfa: texture_2d<u32>;
+@group(0) @binding(1) var tex_dist_field: texture_storage_2d<r16float, write>;
 
 @compute
 @workgroup_size(8, 8, 1)
@@ -10,10 +10,10 @@ fn distance_field(
     let base_coordinates = vec2<u32>(global_id.xy);
     let base_coordinatesf = vec2<f32>(base_coordinates);
 
-    let jfa = vec2<f32>(textureLoad(jfa_texture, base_coordinates, 0).rg);
+    let jfa = vec2<f32>(textureLoad(tex_jfa, base_coordinates, 0).rg);
 
     textureStore(
-        dist_field_texture,
+        tex_dist_field,
         base_coordinates,
         vec4<f32>(distance(base_coordinatesf, jfa))
     );

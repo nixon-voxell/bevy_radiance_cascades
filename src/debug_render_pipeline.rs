@@ -105,7 +105,7 @@ impl ViewNode for DebugRenderPipelineNode {
             // It's important for this to match the BindGroupLayout defined in the PostProcessPipeline
             &BindGroupEntries::single(
                 // Make sure to use the source view
-                &debug_texture.dist_field_texture.default_view,
+                &debug_texture.main_texture().default_view,
             ),
         );
 
