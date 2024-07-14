@@ -79,7 +79,8 @@ pub struct RadianceCascadesLabel;
 /// Adding this to [bevy::prelude::Camera2d] will enable Radiance Cascades GI.
 #[derive(ExtractComponent, Component, Clone, Copy)]
 pub struct RadianceCascadesConfig {
-    /// Determines the number of directions in cascade 0 (resolution_factor * 4).
+    /// Determines the number of directions in cascade 0 (angular resolution).
+    /// `angular_resolution = resolution_factor * 4`.
     resolution_factor: u32,
     /// Interval length of cascade 0 in pixel unit.
     interval: f32,
@@ -318,10 +319,10 @@ impl FromWorld for RadianceCascadesPipeline {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, Debug, Clone, Copy)]
 pub struct RadianceCascadesCount(usize);
 
-#[derive(ShaderType)]
+#[derive(ShaderType, Debug, Clone, Copy)]
 struct Probe {
     pub width: u32,
     pub interval: f32,
@@ -451,11 +452,15 @@ fn prepare_radiance_cascades_buffers(
         let cascade_count = cascade_count.0;
         let mut probe_buffer_offsets = Vec::with_capacity(cascade_count);
 
-        for c in 0..cascade_count {
-            let width = 1 << (c as u32 + config.resolution_factor); // Power of 4
-            let interval = f32::powi(config.interval, c as i32 * 4);
+        for c in 0..cascade_count + 1 {
+            // Power of 4
+            let width = 1 << ((c as u32 + config.resolution_factor) * 2);
+            let interval = config.interval * (1 << (c * 2)) as f32;
+            let probe = Probe { width, interval };
 
-            let offset = probe_buffers.push(&Probe { width, interval });
+            println!("probe: {:?}", probe);
+
+            let offset = probe_buffers.push(&probe);
             probe_buffer_offsets.push(offset);
         }
 
