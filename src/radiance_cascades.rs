@@ -83,19 +83,20 @@ pub struct RadianceCascadesConfig {
     /// `angular_resolution = resolution_factor * 4`.
     resolution_factor: u32,
     /// Interval length of cascade 0 in pixel unit.
-    interval: f32,
+    interval0: f32,
 }
 
 impl RadianceCascadesConfig {
     pub const RESOLUTION_MULTIPLIER: u32 = 4;
 
     /// Creates a new radiance cascades configuration with resolution
-    /// factor clamped above 1.
-    pub fn new(mut resolution_factor: u32, interval: f32) -> Self {
+    /// factor and interval0 clamped above 1.
+    pub fn new(mut resolution_factor: u32, mut interval0: f32) -> Self {
         resolution_factor = u32::max(resolution_factor, 1);
+        interval0 = f32::max(interval0, 1.0);
         Self {
             resolution_factor,
-            interval,
+            interval0,
         }
     }
 
@@ -106,15 +107,11 @@ impl RadianceCascadesConfig {
         self
     }
 
-    /// New config with interval length in pixel unit.
-    pub fn with_interval(mut self, interval: f32) -> Self {
-        self.interval = interval;
+    /// New config with interval length in pixel unit (clamped above 1).
+    pub fn with_interval(mut self, mut interval0: f32) -> Self {
+        interval0 = f32::max(interval0, 1.0);
+        self.interval0 = interval0;
         self
-    }
-
-    /// Get number of directions in cascade 0 ([resolution_factor][Self::resolution_factor] * 4).
-    pub fn get_resolution(&self) -> u32 {
-        self.resolution_factor * Self::RESOLUTION_MULTIPLIER
     }
 }
 
@@ -123,7 +120,7 @@ impl Default for RadianceCascadesConfig {
         Self {
             resolution_factor: 1,
             // Why not?
-            interval: std::f32::consts::PI,
+            interval0: std::f32::consts::PI,
         }
     }
 }
@@ -163,6 +160,8 @@ impl ViewNode for RadianceCascadesNode {
             .push_debug_group("radiance_cascades_pass_group");
 
         let size = view.main_texture().size();
+        let workgroup_size =
+            batch_count(UVec3::new(size.width, size.height, 1), UVec3::new(8, 8, 1));
 
         {
             // Distance field
@@ -177,8 +176,6 @@ impl ViewNode for RadianceCascadesNode {
             dist_field_compute_pass.set_pipeline(dist_field_pipeline);
             dist_field_compute_pass.set_bind_group(0, &bind_groups.dist_field_bind_group, &[]);
 
-            let workgroup_size =
-                batch_count(UVec3::new(size.width, size.height, 1), UVec3::new(8, 8, 1));
             dist_field_compute_pass.dispatch_workgroups(
                 workgroup_size.x,
                 workgroup_size.y,
@@ -197,14 +194,9 @@ impl ViewNode for RadianceCascadesNode {
 
             radiance_cascades_compute_pass.set_pipeline(radiance_cascades_pipeline);
 
-            let resolution = config.get_resolution();
-            let workgroup_size = batch_count(
-                UVec3::new(size.width * resolution, size.height * resolution, 1),
-                UVec3::new(8, 8, 1),
-            );
-
             let cascade_count = cascade_count.0;
             for c in 0..cascade_count {
+                // for c in 0..2 {
                 let offset_index = cascade_count - c - 1;
 
                 // Set bind groups
@@ -325,7 +317,10 @@ pub struct RadianceCascadesCount(usize);
 #[derive(ShaderType, Debug, Clone, Copy)]
 struct Probe {
     pub width: u32,
-    pub interval: f32,
+    /// Staring offset
+    pub start: f32,
+    /// Range of ray
+    pub range: f32,
 }
 
 #[derive(Component)]
@@ -367,9 +362,37 @@ fn calculate_cascade_count(
 ) {
     for (entity, view, config) in q_views.iter() {
         let size = view.main_texture().size();
+        // Use diagonal length as the max length
+        let max_length = f32::sqrt((size.width * size.width + size.height * size.height) as f32);
 
-        let diagonal = f32::sqrt((size.width * size.width + size.height * size.height) as f32);
-        let mut cascade_count = f32::log(diagonal / config.interval, 4.0).ceil() as usize;
+        /*
+        The sum of all intervals can be achieved using geometric sequence:
+        https://saylordotorg.github.io/text_intermediate-algebra/s12-03-geometric-sequences-and-series.html
+
+        Formula: Sn = a1(1−r^n)/(1−r)
+        Where:
+        - Sn: sum of all intervals
+        - a1: first interval
+        -  r: factor (4 as each interval increases its length by 4 every new cascade)
+        -  n: number of cascades
+
+        The goal here is to find n such that Sn < max_length.
+        let x = max_length
+
+        Factoring in the numbers:
+        x > Sn
+        x > a1(1−4^n)/-3
+
+        Rearranging the equation:
+        -3(x) > a1(1−4^n)
+        -3(x)/a1 > 1−4^n
+        4^n > 1 + 3(x)/a1
+        n > log4(1 + 3(x)/a1)
+        */
+        // Ceil is used becaues n should be greater than the value we get.
+        let mut cascade_count =
+            f32::log(1.0 + 3.0 * max_length / config.interval0, 4.0).ceil() as usize;
+
         cascade_count = usize::min(cascade_count, MAX_CASCADE_COUNT);
 
         commands
@@ -380,16 +403,11 @@ fn calculate_cascade_count(
 
 fn prepare_radiance_cascades_textures(
     mut commands: Commands,
-    q_views: Query<(
-        Entity,
-        &ViewTarget,
-        &RadianceCascadesConfig,
-        &RadianceCascadesCount,
-    )>,
+    q_views: Query<(Entity, &ViewTarget, &RadianceCascadesCount)>,
     mut texture_cache: ResMut<TextureCache>,
     render_device: Res<RenderDevice>,
 ) {
-    for (entity, view, config, cascade_count) in q_views.iter() {
+    for (entity, view, cascade_count) in q_views.iter() {
         let mut size = view.main_texture().size();
         size.depth_or_array_layers = 1;
 
@@ -407,9 +425,6 @@ fn prepare_radiance_cascades_textures(
             },
         );
 
-        let resolution = config.get_resolution();
-        size.width *= resolution;
-        size.height *= resolution;
         let cascade_texture_desc = |name: &'static str| TextureDescriptor {
             label: Some(name),
             size,
@@ -452,13 +467,18 @@ fn prepare_radiance_cascades_buffers(
         let cascade_count = cascade_count.0;
         let mut probe_buffer_offsets = Vec::with_capacity(cascade_count);
 
-        for c in 0..cascade_count + 1 {
-            // Power of 4
-            let width = 1 << ((c as u32 + config.resolution_factor) * 2);
-            let interval = config.interval * (1 << (c * 2)) as f32;
-            let probe = Probe { width, interval };
+        for c in 0..cascade_count {
+            // Power of 2
+            let width = 1 << (c as u32 + config.resolution_factor);
+            let start = config.interval0 * (1.0 - f32::powi(4.0, c as i32)) / -3.0;
+            let length = config.interval0 * f32::powi(4.0, c as i32);
+            let probe = Probe {
+                width,
+                start,
+                range: length,
+            };
 
-            println!("probe: {:?}", probe);
+            // println!("{:?}", probe);
 
             let offset = probe_buffers.push(&probe);
             probe_buffer_offsets.push(offset);

@@ -49,31 +49,31 @@ fn setup(
         SmaaSettings::default(),
         jfa::JfaPrepass,
         mask2d::Mask2dPrepass,
-        // radiance_cascades::RadianceCascadesConfig::default(),
+        radiance_cascades::RadianceCascadesConfig::default(),
     ));
 
     // rect
-    // commands.spawn((
-    //     ColorMesh2dBundle {
-    //         mesh: Mesh2dHandle(meshes.add(Rectangle {
-    //             half_size: Vec2::new(20.0, 60.0),
-    //         })),
-    //         material: materials.add(Color::srgba(0.0, 0.0, 0.3, 0.5)),
-    //         transform: Transform::from_xyz(-100.0, 100.0, 0.0),
-    //         ..default()
-    //     },
-    //     mask2d::Mask2d,
-    // ));
-    // commands.spawn((
-    //     ColorMesh2dBundle {
-    //         mesh: Mesh2dHandle(meshes.add(Circle { radius: 50.0 })),
-    //         material: materials.add(Color::srgba(0.0, 2.0, 0.0, 0.5)),
-    //         transform: Transform::from_xyz(0.0, 0.0, 0.1),
-    //         ..default()
-    //     },
-    //     mask2d::Mask2d,
-    //     // Marked,
-    // ));
+    commands.spawn((
+        ColorMesh2dBundle {
+            mesh: Mesh2dHandle(meshes.add(Rectangle {
+                half_size: Vec2::new(20.0, 60.0),
+            })),
+            material: materials.add(Color::srgba(0.0, 0.0, 0.3, 0.5)),
+            transform: Transform::from_xyz(-100.0, 100.0, 0.0),
+            ..default()
+        },
+        mask2d::Mask2d,
+    ));
+    commands.spawn((
+        ColorMesh2dBundle {
+            mesh: Mesh2dHandle(meshes.add(Circle { radius: 50.0 })),
+            material: materials.add(Color::srgba(0.0, 2.0, 0.0, 0.5)),
+            transform: Transform::from_xyz(0.0, 0.0, 0.1),
+            ..default()
+        },
+        mask2d::Mask2d,
+        // Marked,
+    ));
 }
 
 fn animate(mut q_marked: Query<&mut Transform, With<Marked>>, time: Res<Time>) {
@@ -100,9 +100,10 @@ fn draw_radiance_cascade_rays(q_window: Query<&Window, With<PrimaryWindow>>, mut
     let interval0 = 4.0;
     let resolution_factor = 1;
 
-    // The sum of all intervals can be achieved using geometric sequence:
-    // https://saylordotorg.github.io/text_intermediate-algebra/s12-03-geometric-sequences-and-series.html
     /*
+    The sum of all intervals can be achieved using geometric sequence:
+    https://saylordotorg.github.io/text_intermediate-algebra/s12-03-geometric-sequences-and-series.html
+
     Formula: Sn = a1(1−r^n)/(1−r)
     Where:
     - Sn: sum of all intervals
@@ -110,8 +111,8 @@ fn draw_radiance_cascade_rays(q_window: Query<&Window, With<PrimaryWindow>>, mut
     -  r: factor (4 as each interval increases its length by 4 every new cascade)
     -  n: number of cascades
 
-    The goal here is to find Sn such that Sn < diagonal/2.
-    let x = diagonal/2
+    The goal here is to find n such that Sn < diagonal.
+    let x = diagonal
 
     Factoring in the numbers:
     x > Sn
@@ -126,7 +127,6 @@ fn draw_radiance_cascade_rays(q_window: Query<&Window, With<PrimaryWindow>>, mut
     // Ceil is used becaues n should be greater than the value we get.
     let cascade_count = f32::log(1.0 + 3.0 * diagonal / interval0, 4.0).ceil() as usize;
 
-    println!("cascade_count: {}", cascade_count);
     const RAINBOW: [Srgba; 7] = [
         css::RED,
         css::ORANGE,
@@ -143,13 +143,11 @@ fn draw_radiance_cascade_rays(q_window: Query<&Window, With<PrimaryWindow>>, mut
         let start = interval0 * (1.0 - f32::powi(4.0, c as i32)) / -3.0;
         let length = interval0 * f32::powi(4.0, c as i32);
 
-        println!("origin#{}: {}", c, start);
-
         for r in 0..ray_count {
             let mut theta = r as f32 / ray_count as f32 * std::f32::consts::TAU;
             // Add 45 degree
             theta += std::f32::consts::PI * 0.25;
-            let delta = Vec2::new(f32::cos(theta), -f32::sin(theta));
+            let delta = Vec2::new(f32::cos(theta), f32::sin(theta));
             let origin = cursor_position + delta * start;
             gizmos.line_2d(origin, origin + delta * length, RAINBOW[c]);
         }
