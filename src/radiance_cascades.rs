@@ -123,8 +123,7 @@ impl Default for RadianceCascadesConfig {
     fn default() -> Self {
         Self {
             resolution_factor: 1,
-            // Why not?
-            interval0: std::f32::consts::PI,
+            interval0: 2.0,
         }
     }
 }

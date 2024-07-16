@@ -1,7 +1,5 @@
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 
-const SIZE: u32 = 2;
-
 @group(0) @binding(0) var screen_texture: texture_2d<f32>;
 
 @fragment
@@ -17,6 +15,5 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     let dimensionf = vec2<f32>(dimension);
 
-    return vec4<f32>(main_tex);// + vec4<f32>(grid_cell * 0.1, 0, 0);
-    // return vec4<f32>(length(main_tex.rg - tex_coordsf)/vec2<f32>(dimension).x);
+    return vec4<f32>(main_tex);
 }

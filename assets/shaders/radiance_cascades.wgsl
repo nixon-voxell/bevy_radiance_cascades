@@ -96,7 +96,6 @@ fn raymarch(origin: vec2<f32>, ray_dir: vec2<f32>, range: f32) -> vec4<f32> {
 
         covered_range += dist;
     }
-    // let color_sign = sign(color);
 
     return color;
 }
