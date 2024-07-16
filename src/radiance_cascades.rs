@@ -1,5 +1,8 @@
 use bevy::{
-    core_pipeline::core_2d::graph::{Core2d, Node2d},
+    core_pipeline::{
+        core_2d::graph::{Core2d, Node2d},
+        fullscreen_vertex_shader::fullscreen_shader_vertex_state,
+    },
     ecs::query::QueryItem,
     prelude::*,
     render::{
@@ -8,11 +11,14 @@ use bevy::{
             NodeRunError, RenderGraphApp, RenderGraphContext, RenderLabel, ViewNode, ViewNodeRunner,
         },
         render_resource::{
-            binding_types::{texture_2d, texture_storage_2d, uniform_buffer},
+            binding_types::{sampler, texture_2d, texture_storage_2d, uniform_buffer},
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
-            CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor,
-            DynamicUniformBuffer, PipelineCache, ShaderStages, ShaderType, StorageTextureAccess,
-            TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
+            CachedComputePipelineId, CachedRenderPipelineId, ColorTargetState, ColorWrites,
+            ComputePassDescriptor, ComputePipelineDescriptor, DynamicUniformBuffer, FragmentState,
+            PipelineCache, RenderPassColorAttachment, RenderPassDescriptor,
+            RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, ShaderStages,
+            ShaderType, StorageTextureAccess, TextureDescriptor, TextureDimension, TextureFormat,
+            TextureSampleType, TextureUsages,
         },
         renderer::{RenderContext, RenderDevice, RenderQueue},
         texture::{CachedTexture, TextureCache},
@@ -87,8 +93,6 @@ pub struct RadianceCascadesConfig {
 }
 
 impl RadianceCascadesConfig {
-    pub const RESOLUTION_MULTIPLIER: u32 = 4;
-
     /// Creates a new radiance cascades configuration with resolution
     /// factor and interval0 clamped above 1.
     pub fn new(mut resolution_factor: u32, mut interval0: f32) -> Self {
@@ -132,8 +136,8 @@ impl ViewNode for RadianceCascadesNode {
     type ViewQuery = (
         &'static ViewTarget,
         &'static RadianceCascadesBindGroups,
+        &'static RadianceCascadesTextures,
         &'static RadianceCascadesCount,
-        &'static RadianceCascadesConfig,
         &'static RadianceCascadesBuffer,
     );
 
@@ -141,17 +145,25 @@ impl ViewNode for RadianceCascadesNode {
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        (view, bind_groups, cascade_count, config, buffer): QueryItem<'w, Self::ViewQuery>,
+        (view, bind_groups, textures, cascade_count, buffer): QueryItem<'w, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let pipeline = world.resource::<RadianceCascadesPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
         // Get the pipeline from the cache
-        let (Some(dist_field_pipeline), Some(radiance_cascades_pipeline)) = (
+        let (
+            Some(dist_field_pipeline),
+            Some(radiance_cascades_pipeline),
+            Some(radiance_cascades_merge_pipeline),
+            Some(radiance_cascades_mipmap_pipeline),
+        ) = (
             pipeline_cache.get_compute_pipeline(pipeline.dist_field_pipeline),
             pipeline_cache.get_compute_pipeline(pipeline.radiance_cascades_pipeline),
-        ) else {
+            pipeline_cache.get_compute_pipeline(pipeline.radiance_cascades_merge_pipeline),
+            pipeline_cache.get_render_pipeline(pipeline.radiance_cascades_mipmap_pipeline),
+        )
+        else {
             return Ok(());
         };
 
@@ -192,11 +204,27 @@ impl ViewNode for RadianceCascadesNode {
                     timestamp_writes: None,
                 });
 
+            let cascade_count = cascade_count.0 - 1;
+            // First cascade does not require any merging
             radiance_cascades_compute_pass.set_pipeline(radiance_cascades_pipeline);
+            // Set bind groups
+            radiance_cascades_compute_pass.set_bind_group(
+                0,
+                &bind_groups.radiance_cascades_10_bind_group,
+                &[buffer.probe_buffer_offsets[cascade_count]],
+            );
 
-            let cascade_count = cascade_count.0;
+            // Dispatch compute shader
+            radiance_cascades_compute_pass.dispatch_workgroups(
+                workgroup_size.x,
+                workgroup_size.y,
+                workgroup_size.z,
+            );
+
+            // Merging is required after the first cascade
+            radiance_cascades_compute_pass.set_pipeline(radiance_cascades_merge_pipeline);
+
             for c in 0..cascade_count {
-                // for c in 0..2 {
                 let offset_index = cascade_count - c - 1;
 
                 // Set bind groups
@@ -219,6 +247,44 @@ impl ViewNode for RadianceCascadesNode {
             }
         }
 
+        let post_process = view.post_process_write();
+        {
+            // Radiance cascades mipmap
+            let radiance_cascades_mipmap_bind_group =
+                render_context.render_device().create_bind_group(
+                    Some("radiance_cascades_mipmap_bind_group"),
+                    &pipeline.radiance_cascades_mipmap_bind_group_layout,
+                    &BindGroupEntries::sequential((
+                        &buffer.probe_buffers,
+                        post_process.source,
+                        &pipeline.main_sampler,
+                        &textures.main_texture().default_view,
+                    )),
+                );
+            let mut radiance_cascades_mipmap_render_pass = render_context
+                .command_encoder()
+                .begin_render_pass(&RenderPassDescriptor {
+                    label: Some("radiance_cascades_mipmap_render_pass"),
+                    color_attachments: &[Some(RenderPassColorAttachment {
+                        view: post_process.destination,
+                        resolve_target: None,
+                        ops: default(),
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+            radiance_cascades_mipmap_render_pass.set_pipeline(radiance_cascades_mipmap_pipeline);
+            radiance_cascades_mipmap_render_pass.set_bind_group(
+                0,
+                &radiance_cascades_mipmap_bind_group,
+                // First probe
+                &[buffer.probe_buffer_offsets[0]],
+            );
+            radiance_cascades_mipmap_render_pass.draw(0..3, 0..1);
+        }
+
         render_context.command_encoder().pop_debug_group();
 
         Ok(())
@@ -229,8 +295,12 @@ impl ViewNode for RadianceCascadesNode {
 struct RadianceCascadesPipeline {
     dist_field_bind_group_layout: BindGroupLayout,
     radiance_cascades_bind_group_layout: BindGroupLayout,
+    radiance_cascades_mipmap_bind_group_layout: BindGroupLayout,
     dist_field_pipeline: CachedComputePipelineId,
     radiance_cascades_pipeline: CachedComputePipelineId,
+    radiance_cascades_merge_pipeline: CachedComputePipelineId,
+    radiance_cascades_mipmap_pipeline: CachedRenderPipelineId,
+    main_sampler: Sampler,
 }
 
 impl FromWorld for RadianceCascadesPipeline {
@@ -241,6 +311,8 @@ impl FromWorld for RadianceCascadesPipeline {
         // Shader
         let dist_field_shader = world.load_asset("shaders/distance_field.wgsl");
         let radiance_cascades_shader = world.load_asset("shaders/radiance_cascades.wgsl");
+        let radiance_cascades_mipmap_shader =
+            world.load_asset("shaders/radiance_cascades_mipmap.wgsl");
 
         // Bind group layout
         let dist_field_bind_group_layout = render_device.create_bind_group_layout(
@@ -281,6 +353,22 @@ impl FromWorld for RadianceCascadesPipeline {
             ),
         );
 
+        let radiance_cascades_mipmap_bind_group_layout = render_device.create_bind_group_layout(
+            "radiance_cascades_mipmap_bind_group_layout",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::FRAGMENT,
+                (
+                    // Probe width
+                    uniform_buffer::<Probe>(true),
+                    // Main texture
+                    texture_2d(TextureSampleType::Float { filterable: true }),
+                    sampler(SamplerBindingType::Filtering),
+                    // Cascade 0 texture
+                    texture_2d(TextureSampleType::Float { filterable: false }),
+                ),
+            ),
+        );
+
         // Pipeline
         let dist_field_pipeline =
             pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -296,17 +384,52 @@ impl FromWorld for RadianceCascadesPipeline {
             pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
                 label: Some("radiance_cascades_pipeline".into()),
                 layout: vec![radiance_cascades_bind_group_layout.clone()],
-                shader: radiance_cascades_shader,
+                shader: radiance_cascades_shader.clone(),
                 shader_defs: vec![],
                 entry_point: "radiance_cascades".into(),
                 push_constant_ranges: vec![],
             });
 
+        let radiance_cascades_merge_pipeline =
+            pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+                label: Some("radiance_cascades_merge_pipeline".into()),
+                layout: vec![radiance_cascades_bind_group_layout.clone()],
+                shader: radiance_cascades_shader,
+                shader_defs: vec!["MERGE".into()],
+                entry_point: "radiance_cascades".into(),
+                push_constant_ranges: vec![],
+            });
+
+        let radiance_cascades_mipmap_pipeline =
+            pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
+                label: Some("radiance_cascades_mipmap_pipeline".into()),
+                layout: vec![radiance_cascades_mipmap_bind_group_layout.clone()],
+                vertex: fullscreen_shader_vertex_state(),
+                fragment: Some(FragmentState {
+                    shader: radiance_cascades_mipmap_shader,
+                    shader_defs: vec![],
+                    entry_point: "fragment".into(),
+                    targets: vec![Some(ColorTargetState {
+                        format: RadianceCascadesTextures::CASCADE_FORMAT,
+                        blend: None,
+                        write_mask: ColorWrites::ALL,
+                    })],
+                }),
+                push_constant_ranges: vec![],
+                primitive: default(),
+                depth_stencil: None,
+                multisample: default(),
+            });
+
         Self {
             dist_field_bind_group_layout,
             radiance_cascades_bind_group_layout,
+            radiance_cascades_mipmap_bind_group_layout,
             dist_field_pipeline,
             radiance_cascades_pipeline,
+            radiance_cascades_merge_pipeline,
+            radiance_cascades_mipmap_pipeline,
+            main_sampler: render_device.create_sampler(&SamplerDescriptor::default()),
         }
     }
 }
@@ -339,7 +462,7 @@ pub struct RadianceCascadesTextures {
 
 impl RadianceCascadesTextures {
     pub const DIST_FIELD_FORMAT: TextureFormat = TextureFormat::R16Float;
-    pub const CASCADE_FORMAT: TextureFormat = TextureFormat::Rgba32Float;
+    pub const CASCADE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
     pub fn main_texture(&self) -> &CachedTexture {
         match self.is_texture0 {
@@ -449,7 +572,7 @@ fn prepare_radiance_cascades_textures(
             dist_field_texture,
             radiance_cascades_texture0,
             radiance_cascades_texture1,
-            is_texture0: cascade_count.0 % 2 == 0,
+            is_texture0: cascade_count.0 % 2 != 0,
         });
     }
 }
@@ -468,14 +591,13 @@ fn prepare_radiance_cascades_buffers(
         let mut probe_buffer_offsets = Vec::with_capacity(cascade_count);
 
         for c in 0..cascade_count {
-            // Power of 2
             let width = 1 << (c as u32 + config.resolution_factor);
             let start = config.interval0 * (1.0 - f32::powi(4.0, c as i32)) / -3.0;
-            let length = config.interval0 * f32::powi(4.0, c as i32);
+            let range = config.interval0 * f32::powi(4.0, c as i32);
             let probe = Probe {
                 width,
                 start,
-                range: length,
+                range,
             };
 
             // println!("{:?}", probe);

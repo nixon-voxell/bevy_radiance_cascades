@@ -66,6 +66,7 @@ impl ViewNode for DebugRenderPipelineNode {
     type ViewQuery = (
         &'static ViewTarget,
         &'static crate::radiance_cascades::RadianceCascadesTextures,
+        // &'static crate::jfa::JfaPrepassTextures,
     );
 
     fn run<'w>(
@@ -105,7 +106,7 @@ impl ViewNode for DebugRenderPipelineNode {
             // It's important for this to match the BindGroupLayout defined in the PostProcessPipeline
             &BindGroupEntries::single(
                 // Make sure to use the source view
-                &debug_texture.main_texture().default_view,
+                &debug_texture.radiance_cascades_texture0.default_view,
             ),
         );
 

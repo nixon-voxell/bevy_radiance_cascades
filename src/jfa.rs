@@ -320,7 +320,7 @@ fn prepare_jfa_textures(
             .insert(JfaPrepassTextures {
                 jfa_texture0,
                 jfa_texture1,
-                is_texture0: iter_count % 2 == 0,
+                is_texture0: iter_count % 2 != 0,
             })
             .insert(JfaPrepassIterCount(iter_count));
     }
