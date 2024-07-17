@@ -68,8 +68,18 @@ fn raymarch(origin: vec2<f32>, ray_dir: vec2<f32>, range: f32) -> vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(tex_main));
 
     for (var r = 0u; r < MAX_RAYMARCH; r++) {
+        if (
+            covered_range >= range ||
+            any(position >= dimensions) ||
+            any(position < vec2<f32>(0.0))
+        ) {
+            break;
+        }
+
         var dist = textureLoad(tex_dist_field, vec2<u32>(round(position)), 0).r;
         position += ray_dir * dist;
+        covered_range += dist;
+
         if (dist < EPSILON) {
             position += ray_dir * 1.5;
             color = textureLoad(tex_main, vec2<u32>(round(position)), 0);
@@ -87,17 +97,6 @@ fn raymarch(origin: vec2<f32>, ray_dir: vec2<f32>, range: f32) -> vec4<f32> {
             color.a = 1.0;
             break;
         }
-
-        covered_range += dist;
-
-        if (
-            covered_range >= range ||
-            any(position > dimensions) ||
-            any(position < vec2<f32>(0.0))
-        ) {
-            break;
-        }
-
     }
 
     return color;
@@ -157,7 +156,7 @@ fn merge(probe_cell: vec2<u32>, probe_coord: vec2<u32>, ray_index: u32) -> vec4<
             vec2<f32>(probe_coord) -
             vec2<f32>(probe_cell / 2 * prev_width)
         ) / f32(prev_width)
-    ) * 0.5;
+    ) * 0.25;
 
     return mix(mix(TL, TR, weight.x), mix(BL, BR, weight.x), weight.y) * 0.25;
     // return TL * 0.25;

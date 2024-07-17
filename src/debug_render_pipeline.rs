@@ -65,8 +65,8 @@ pub struct DebugRenderPipelineNode;
 impl ViewNode for DebugRenderPipelineNode {
     type ViewQuery = (
         &'static ViewTarget,
-        // &'static crate::radiance_cascades::RadianceCascadesTextures,
-        &'static crate::jfa::JfaPrepassTextures,
+        &'static crate::radiance_cascades::RadianceCascadesTextures,
+        // &'static crate::jfa::JfaPrepassTextures,
     );
 
     fn run<'w>(
@@ -156,8 +156,8 @@ impl FromWorld for DebugRenderPipeline {
                 // The layout entries will only be visible in the fragment stage
                 ShaderStages::FRAGMENT,
                 // The screen texture
-                // texture_2d(TextureSampleType::Float { filterable: true }),
-                texture_2d(TextureSampleType::Uint),
+                texture_2d(TextureSampleType::Float { filterable: true }),
+                // texture_2d(TextureSampleType::Uint),
             ),
         );
 

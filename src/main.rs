@@ -18,7 +18,7 @@ fn main() {
         .add_plugins(mask2d::Mask2dPrepassPlugin::<ColorMaterial>::default())
         .add_plugins(jfa::JfaPrepassPlugin)
         .add_plugins(radiance_cascades::RadianceCascadesPlugin)
-        .add_plugins(debug_render_pipeline::DebugRenderPipelinePlugin)
+        // .add_plugins(debug_render_pipeline::DebugRenderPipelinePlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, follow_mouse)
         // .add_systems(Update, draw_radiance_cascade_rays)
