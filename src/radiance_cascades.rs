@@ -224,6 +224,7 @@ impl ViewNode for RadianceCascadesNode {
             radiance_cascades_compute_pass.set_pipeline(radiance_cascades_merge_pipeline);
 
             for c in 0..cascade_count {
+                // for c in 0..3 {
                 let offset_index = cascade_count - c - 1;
 
                 // Set bind groups

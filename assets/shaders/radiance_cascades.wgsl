@@ -18,6 +18,11 @@ fn radiance_cascades(
     @builtin(local_invocation_id) local_id: vec3<u32>
 ) {
     let base_coord = global_id.xy;
+    let dimensions = textureDimensions(tex_radiance_cascades_source);
+
+    if any(base_coord >= dimensions) {
+        return;
+    }
 
     // Coordinate inside the probe grid
     let probe_texel = base_coord % probe.width;
@@ -28,7 +33,7 @@ fn radiance_cascades(
     var ray_angle = f32(ray_index) / f32(ray_count) * PI_2;
     // Rotate 45 degrees
     ray_angle += QUARTER_PI;
-    let ray_dir = vec2<f32>(cos(ray_angle), sin(ray_angle));
+    let ray_dir = normalize(vec2<f32>(cos(ray_angle), sin(ray_angle)));
 
     // Coordinate of cell in probe grid
     let probe_cell = base_coord / probe.width;
@@ -37,8 +42,6 @@ fn radiance_cascades(
 
     // Center coordinate of the probe grid
     var probe_coord_center = probe_coord + probe.width / 2;
-    // TODO: Investigate
-    // 0.5 is added as probe width is always an even number
     let origin = vec2<f32>(probe_coord_center) + ray_dir * probe.start;
 
     var color = raymarch(origin, ray_dir, probe.range);
@@ -65,18 +68,10 @@ fn raymarch(origin: vec2<f32>, ray_dir: vec2<f32>, range: f32) -> vec4<f32> {
     let dimensions = vec2<f32>(textureDimensions(tex_main));
 
     for (var r = 0u; r < MAX_RAYMARCH; r++) {
-        if (
-            covered_range >= range ||
-            any(position > dimensions) ||
-            any(position < vec2<f32>(0.0))
-        ) {
-            break;
-        }
-
         var dist = textureLoad(tex_dist_field, vec2<u32>(round(position)), 0).r;
         position += ray_dir * dist;
         if (dist < EPSILON) {
-            position += ray_dir * 1.0;
+            position += ray_dir * 1.5;
             color = textureLoad(tex_main, vec2<u32>(round(position)), 0);
 
             // Treat values from -1.0 ~ 1.0 as no light
@@ -94,6 +89,15 @@ fn raymarch(origin: vec2<f32>, ray_dir: vec2<f32>, range: f32) -> vec4<f32> {
         }
 
         covered_range += dist;
+
+        if (
+            covered_range >= range ||
+            any(position > dimensions) ||
+            any(position < vec2<f32>(0.0))
+        ) {
+            break;
+        }
+
     }
 
     return color;
@@ -114,7 +118,7 @@ fn merge(probe_cell: vec2<u32>, probe_coord: vec2<u32>, ray_index: u32) -> vec4<
 
         let offset_coord = vec2<u32>(
             prev_ray_index % prev_width,
-            prev_ray_index / prev_width
+            prev_ray_index / prev_width,
         );
 
         TL += fetch_cascade(
@@ -147,11 +151,16 @@ fn merge(probe_cell: vec2<u32>, probe_coord: vec2<u32>, ray_index: u32) -> vec4<
         );
     }
 
-    let weight = 0.25 + (
-        (vec2<f32>(probe_coord) - vec2<f32>(probe_cell / 2 * prev_width)) / f32(prev_width)
+    // let weight = vec2f(0.25);
+    var weight = 0.25 + (
+        (
+            vec2<f32>(probe_coord) -
+            vec2<f32>(probe_cell / 2 * prev_width)
+        ) / f32(prev_width)
     ) * 0.5;
 
     return mix(mix(TL, TR, weight.x), mix(BL, BR, weight.x), weight.y) * 0.25;
+    // return TL * 0.25;
 }
 
 fn fetch_cascade(
@@ -162,12 +171,9 @@ fn fetch_cascade(
     dimensions: vec2<u32>,
     prev_width: u32,
 ) -> vec4<f32> {
-    let prev_probe_cell = (probe_cell / 2 + probe_offset) * prev_width;
-    let prev_probe_coord = prev_probe_cell + offset_coord;
-
-    if (any(prev_probe_coord >= dimensions)) {
-        return vec4<f32>(0.0);
-    }
+    var prev_probe_cell = probe_cell / 2 + probe_offset;
+    prev_probe_cell = min(prev_probe_cell, dimensions / prev_width - 1);
+    var prev_probe_coord = prev_probe_cell * prev_width + offset_coord;
 
     return textureLoad(tex_radiance_cascades_source, prev_probe_coord, 0);
 }
