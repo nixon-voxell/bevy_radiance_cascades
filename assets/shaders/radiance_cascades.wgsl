@@ -39,8 +39,7 @@ fn radiance_cascades(
     var probe_coord_center = probe_coord + probe.width / 2;
     // TODO: Investigate
     // 0.5 is added as probe width is always an even number
-    let origin = vec2<f32>(probe_coord_center) + 0.5 + ray_dir * probe.start;
-    // let origin = vec2<f32>(probe_coord_center) + ray_dir * probe.start;
+    let origin = vec2<f32>(probe_coord_center) + ray_dir * probe.start;
 
     var color = raymarch(origin, ray_dir, probe.range);
 

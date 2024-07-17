@@ -67,7 +67,7 @@ fn setup(
     commands.spawn((
         ColorMesh2dBundle {
             mesh: Mesh2dHandle(meshes.add(Circle { radius: 50.0 })),
-            material: materials.add(Color::linear_rgba(0.0, 0.0, -4.0, 0.5)),
+            material: materials.add(Color::linear_rgba(0.0, 3.0, 0.0, 0.5)),
             transform: Transform::from_xyz(0.0, 0.0, 0.1),
             ..default()
         },
