@@ -150,8 +150,7 @@ fn merge(probe_cell: vec2<u32>, probe_coord: vec2<u32>, ray_index: u32) -> vec4<
         );
     }
 
-    // let weight = vec2f(0.25);
-    var weight = 0.25 + (
+    let weight = 0.25 + (
         (
             vec2<f32>(probe_coord) -
             vec2<f32>(probe_cell / 2 * prev_width)
@@ -159,7 +158,6 @@ fn merge(probe_cell: vec2<u32>, probe_coord: vec2<u32>, ray_index: u32) -> vec4<
     ) * 0.25;
 
     return mix(mix(TL, TR, weight.x), mix(BL, BR, weight.x), weight.y) * 0.25;
-    // return TL * 0.25;
 }
 
 fn fetch_cascade(
@@ -171,8 +169,9 @@ fn fetch_cascade(
     prev_width: u32,
 ) -> vec4<f32> {
     var prev_probe_cell = probe_cell / 2 + probe_offset;
+    // FIXME: Dirty hack to eliminate darkening near the right and bottom edges
     prev_probe_cell = min(prev_probe_cell, dimensions / prev_width - 1);
-    var prev_probe_coord = prev_probe_cell * prev_width + offset_coord;
+    let prev_probe_coord = prev_probe_cell * prev_width + offset_coord;
 
     return textureLoad(tex_radiance_cascades_source, prev_probe_coord, 0);
 }
