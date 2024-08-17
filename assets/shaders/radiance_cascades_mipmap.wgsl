@@ -5,6 +5,8 @@
 @group(0) @binding(1) var tex_main: texture_2d<f32>;
 @group(0) @binding(2) var sampler_main: sampler;
 @group(0) @binding(3) var tex_radiance_field: texture_2d<f32>;
+// TODO: REMOVE
+@group(0) @binding(4) var tex_radiance_field1: texture_2d<f32>;
 
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
@@ -22,7 +24,8 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     let main = textureSample(tex_main, sampler_main, in.uv);
 
-    // Bilinear filtering should be used..?
+    // TODO: Bilinear filtering should be used..?
     return main + accumulation;
-    // return textureLoad(tex_radiance_field, vec2<u32>(in.uv * dimensions), 0);
+    // return main + pow(accumulation * 0.5, vec4f(6.0)) * 10.0;
+    // return textureLoad(tex_radiance_field1, vec2<u32>(in.uv * dimensions), 0);
 }
