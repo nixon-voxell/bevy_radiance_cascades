@@ -15,12 +15,14 @@ mod radiance_cascades;
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
+        .insert_resource(Msaa::Off)
         .add_plugins(mask2d::Mask2dPrepassPlugin::<ColorMaterial>::default())
         .add_plugins(jfa::JfaPrepassPlugin)
         .add_plugins(radiance_cascades::RadianceCascadesPlugin)
         // .add_plugins(debug_render_pipeline::DebugRenderPipelinePlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, follow_mouse)
+        .add_systems(Update, cascade_settings)
         // .add_systems(Update, draw_radiance_cascade_rays)
         .run();
 }
@@ -39,7 +41,7 @@ fn setup(
             transform: Transform::from_translation(Vec3::new(0.0, 0.0, 5.0))
                 .looking_at(Vec3::default(), Vec3::Y),
             camera: Camera {
-                clear_color: Color::NONE.into(),
+                clear_color: Color::BLACK.into(),
                 hdr: true,
                 ..default()
             },
@@ -48,27 +50,28 @@ fn setup(
         },
         jfa::JfaPrepass,
         mask2d::Mask2dPrepass,
-        radiance_cascades::RadianceCascadesConfig::new(1, 2.0),
-        BloomSettings::default(),
-        SmaaSettings::default(),
+        radiance_cascades::RadianceCascadesConfig::new(1, 128.0),
+        // BloomSettings::default(),
+        // SmaaSettings::default(),
     ));
 
-    // rect
+    // Rect
+    // commands.spawn((
+    //     ColorMesh2dBundle {
+    //         mesh: Mesh2dHandle(meshes.add(Rectangle {
+    //             half_size: Vec2::new(20.0, 20.0),
+    //         })),
+    //         material: materials.add(Color::linear_rgba(0.0, 0.0, 1.0, 0.5)),
+    //         transform: Transform::from_xyz(-100.0, 100.0, 0.0),
+    //         ..default()
+    //     },
+    //     mask2d::Mask2d,
+    // ));
+    // Circle
     commands.spawn((
         ColorMesh2dBundle {
-            mesh: Mesh2dHandle(meshes.add(Rectangle {
-                half_size: Vec2::new(20.0, 60.0),
-            })),
-            material: materials.add(Color::linear_rgba(0.0, 0.0, 10.0, 0.5)),
-            transform: Transform::from_xyz(-100.0, 100.0, 0.0),
-            ..default()
-        },
-        mask2d::Mask2d,
-    ));
-    commands.spawn((
-        ColorMesh2dBundle {
-            mesh: Mesh2dHandle(meshes.add(Circle { radius: 50.0 })),
-            material: materials.add(Color::linear_rgba(10.0, 0.0, 0.0, 0.5)),
+            mesh: Mesh2dHandle(meshes.add(Circle { radius: 10.0 })),
+            material: materials.add(Color::linear_rgba(2.0, 0.0, 0.0, 1.0)),
             transform: Transform::from_xyz(0.0, 0.0, 0.1),
             ..default()
         },
@@ -94,8 +97,34 @@ fn follow_mouse(
     cursor_position.y = -cursor_position.y;
     cursor_position += Vec2::new(-width, height) * 0.5;
 
-    for mut tranfsorm in q_marked.iter_mut() {
-        tranfsorm.translation.x = cursor_position.x;
-        tranfsorm.translation.y = cursor_position.y;
+    for mut transform in q_marked.iter_mut() {
+        transform.translation.x = cursor_position.x;
+        transform.translation.y = cursor_position.y;
+    }
+}
+
+fn cascade_settings(
+    mut q_cascade: Query<&mut radiance_cascades::RadianceCascadesConfig>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+) {
+    const SPEED: f32 = 8.0;
+    let Ok(mut config) = q_cascade.get_single_mut() else {
+        return;
+    };
+
+    let speed = SPEED
+        * match keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+            true => 32.0,
+            false => 1.0,
+        };
+
+    if keyboard.pressed(KeyCode::ArrowUp) {
+        let interval = config.get_interval();
+        config.set_interval(interval + time.delta_seconds() * speed);
+    }
+    if keyboard.pressed(KeyCode::ArrowDown) {
+        let interval = config.get_interval();
+        config.set_interval(interval - time.delta_seconds() * speed);
     }
 }

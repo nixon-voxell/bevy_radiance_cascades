@@ -117,6 +117,26 @@ impl RadianceCascadesConfig {
         self.interval0 = interval0;
         self
     }
+
+    /// Mutably set resolution factor (clamped above 1).
+    pub fn set_resolution_factor(&mut self, mut resolution_factor: u32) {
+        resolution_factor = u32::max(resolution_factor, 1);
+        self.resolution_factor = resolution_factor;
+    }
+
+    /// Mutably set interval length in pixel unit (clamped above 1).
+    pub fn set_interval(&mut self, mut interval0: f32) {
+        interval0 = f32::max(interval0, 1.0);
+        self.interval0 = interval0;
+    }
+
+    pub fn get_resolution_factor(&self) -> u32 {
+        self.resolution_factor
+    }
+
+    pub fn get_interval(&self) -> f32 {
+        self.interval0
+    }
 }
 
 impl Default for RadianceCascadesConfig {
@@ -153,12 +173,12 @@ impl ViewNode for RadianceCascadesNode {
         // Get the pipeline from the cache
         let (
             Some(dist_field_pipeline),
-            Some(radiance_cascades_pipeline),
+            Some(radiance_cascades_no_merge_pipeline),
             Some(radiance_cascades_merge_pipeline),
             Some(radiance_cascades_mipmap_pipeline),
         ) = (
             pipeline_cache.get_compute_pipeline(pipeline.dist_field_pipeline),
-            pipeline_cache.get_compute_pipeline(pipeline.radiance_cascades_pipeline),
+            pipeline_cache.get_compute_pipeline(pipeline.radiance_cascades_no_merge_pipeline),
             pipeline_cache.get_compute_pipeline(pipeline.radiance_cascades_merge_pipeline),
             pipeline_cache.get_render_pipeline(pipeline.radiance_cascades_mipmap_pipeline),
         )
@@ -205,7 +225,7 @@ impl ViewNode for RadianceCascadesNode {
 
             let cascade_count = cascade_count.0 - 1;
             // First cascade does not require any merging
-            radiance_cascades_compute_pass.set_pipeline(radiance_cascades_pipeline);
+            radiance_cascades_compute_pass.set_pipeline(radiance_cascades_no_merge_pipeline);
             // Set bind groups
             radiance_cascades_compute_pass.set_bind_group(
                 0,
@@ -224,7 +244,6 @@ impl ViewNode for RadianceCascadesNode {
             radiance_cascades_compute_pass.set_pipeline(radiance_cascades_merge_pipeline);
 
             for c in 0..cascade_count {
-                // for c in 0..1 {
                 let offset_index = cascade_count - c - 1;
 
                 // Set bind groups
@@ -297,7 +316,7 @@ struct RadianceCascadesPipeline {
     radiance_cascades_bind_group_layout: BindGroupLayout,
     radiance_cascades_mipmap_bind_group_layout: BindGroupLayout,
     dist_field_pipeline: CachedComputePipelineId,
-    radiance_cascades_pipeline: CachedComputePipelineId,
+    radiance_cascades_no_merge_pipeline: CachedComputePipelineId,
     radiance_cascades_merge_pipeline: CachedComputePipelineId,
     radiance_cascades_mipmap_pipeline: CachedRenderPipelineId,
     main_sampler: Sampler,
@@ -380,9 +399,9 @@ impl FromWorld for RadianceCascadesPipeline {
                 push_constant_ranges: vec![],
             });
 
-        let radiance_cascades_pipeline =
+        let radiance_cascades_no_merge_pipeline =
             pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-                label: Some("radiance_cascades_pipeline".into()),
+                label: Some("radiance_cascades_no_merge_pipeline".into()),
                 layout: vec![radiance_cascades_bind_group_layout.clone()],
                 shader: radiance_cascades_shader.clone(),
                 shader_defs: vec![],
@@ -426,7 +445,7 @@ impl FromWorld for RadianceCascadesPipeline {
             radiance_cascades_bind_group_layout,
             radiance_cascades_mipmap_bind_group_layout,
             dist_field_pipeline,
-            radiance_cascades_pipeline,
+            radiance_cascades_no_merge_pipeline,
             radiance_cascades_merge_pipeline,
             radiance_cascades_mipmap_pipeline,
             main_sampler: render_device.create_sampler(&SamplerDescriptor::default()),
@@ -440,9 +459,9 @@ pub struct RadianceCascadesCount(usize);
 #[derive(ShaderType, Debug, Clone, Copy)]
 struct Probe {
     pub width: u32,
-    /// Staring offset
+    /// Staring offset.
     pub start: f32,
-    /// Range of ray
+    /// Range of ray.
     pub range: f32,
 }
 
@@ -457,6 +476,7 @@ pub struct RadianceCascadesTextures {
     pub dist_field_texture: CachedTexture,
     pub radiance_cascades_texture0: CachedTexture,
     pub radiance_cascades_texture1: CachedTexture,
+    // pub radiance_mipmap_texture: CachedTexture,
     is_texture0: bool,
 }
 
@@ -568,6 +588,13 @@ fn prepare_radiance_cascades_textures(
             cascade_texture_desc("radiance_cascade_1_texture"),
         );
 
+        // // let radiance_mipmap_texture =texture_cache.get(&render_device, TextureDescriptor {
+        // //     label: Some("radiance_mipmap_texture"),
+        // //     size: size / 2,
+        // //     mip_level_count: 1,
+        // //     sample_count
+        // });
+
         commands.entity(entity).insert(RadianceCascadesTextures {
             dist_field_texture,
             radiance_cascades_texture0,
@@ -599,8 +626,6 @@ fn prepare_radiance_cascades_buffers(
                 start,
                 range,
             };
-
-            // println!("{:?}", probe);
 
             let offset = probe_buffers.push(&probe);
             probe_buffer_offsets.push(offset);

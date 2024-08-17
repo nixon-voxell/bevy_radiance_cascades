@@ -23,6 +23,6 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let main = textureSample(tex_main, sampler_main, in.uv);
 
     // Bilinear filtering should be used..?
-    return main + accumulation;
-    // return textureLoad(tex_radiance_field, vec2<u32>(in.uv * dimensions), 0);
+    // return main + accumulation;
+    return textureLoad(tex_radiance_field, vec2<u32>(in.uv * dimensions), 0);
 }

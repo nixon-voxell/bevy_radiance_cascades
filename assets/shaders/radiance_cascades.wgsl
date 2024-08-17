@@ -30,9 +30,7 @@ fn radiance_cascades(
     let ray_index = probe_texel.x + probe_texel.y * probe.width;
     let ray_count = probe.width * probe.width;
 
-    var ray_angle = f32(ray_index) / f32(ray_count) * PI_2;
-    // Rotate 45 degrees
-    ray_angle += QUARTER_PI;
+    var ray_angle = (f32(ray_index) + 0.5) / f32(ray_count) * PI_2;
     let ray_dir = normalize(vec2<f32>(cos(ray_angle), sin(ray_angle)));
 
     // Coordinate of cell in probe grid
@@ -76,13 +74,12 @@ fn raymarch(origin: vec2<f32>, ray_dir: vec2<f32>, range: f32) -> vec4<f32> {
             break;
         }
 
-        var dist = textureLoad(tex_dist_field, vec2<u32>(round(position)), 0).r;
-        position += ray_dir * dist;
-        covered_range += dist;
+        let coord = vec2<u32>(round(position));
+        var dist = textureLoad(tex_dist_field, coord, 0).r;
 
         if (dist < EPSILON) {
-            position += ray_dir * 1.5;
-            color = textureLoad(tex_main, vec2<u32>(round(position)), 0);
+            // position += ray_dir * 1.5;
+            color = textureLoad(tex_main, coord, 0);
 
             // Treat values from -1.0 ~ 1.0 as no light
             // This way, we can handle both negative and postive light
@@ -97,6 +94,9 @@ fn raymarch(origin: vec2<f32>, ray_dir: vec2<f32>, range: f32) -> vec4<f32> {
             color.a = 1.0;
             break;
         }
+
+        position += ray_dir * dist;
+        covered_range += dist;
     }
 
     return color;
@@ -170,7 +170,7 @@ fn fetch_cascade(
 ) -> vec4<f32> {
     var prev_probe_cell = probe_cell / 2 + probe_offset;
     // FIXME: Dirty hack to eliminate darkening near the right and bottom edges
-    prev_probe_cell = min(prev_probe_cell, dimensions / prev_width - 1);
+    // prev_probe_cell = min(prev_probe_cell, dimensions / prev_width - 1);
     let prev_probe_coord = prev_probe_cell * prev_width + offset_coord;
 
     return textureLoad(tex_radiance_cascades_source, prev_probe_coord, 0);
