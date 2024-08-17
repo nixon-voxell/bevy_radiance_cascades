@@ -30,9 +30,10 @@ fn radiance_cascades(
     let ray_index = probe_texel.x + probe_texel.y * probe.width;
     let ray_count = probe.width * probe.width;
 
-    var ray_angle = (f32(ray_index) + 0.5) / f32(ray_count) * PI_2;
+    var ray_angle = f32(ray_index) / f32(ray_count) * PI_2;
     // Rotate 45 degrees
-    let ray_dir = vec2<f32>(cos(ray_angle), sin(ray_angle));
+    ray_angle += QUARTER_PI;
+    let ray_dir = normalize(vec2<f32>(cos(ray_angle), sin(ray_angle)));
 
     // Coordinate of cell in probe grid
     let probe_cell = base_coord / probe.width;
@@ -40,12 +41,10 @@ fn radiance_cascades(
     let probe_coord = probe_cell * probe.width;
 
     // Center coordinate of the probe grid
-    // let probe_coord_center = probe_coord;
     var probe_coord_center = probe_coord + probe.width / 2;
     let origin = vec2<f32>(probe_coord_center) + ray_dir * probe.start;
 
     var color = raymarch(origin, ray_dir, probe.range);
-    color = max(color, vec4<f32>(0.0));
 
 #ifdef MERGE
     // TODO: Factor in transparency.
@@ -54,24 +53,10 @@ fn radiance_cascades(
     }
 #endif
 
-    let size: u32 = 64u;
-    // if (probe.width >= size) {
-    //     return;
-    // }
-
-    var c = color;
-    // if (probe.width == size) {
-    //     c += vec4<f32>(vec2<f32>(probe_texel) / f32(probe.width), 0, 0) * 0.1;
-        
-    // }
-
     textureStore(
         tex_radiance_cascades_destination,
         base_coord,
-        c
-        // color
-        // vec4<f32>(vec2<f32>(probe_cell), 0, 0) / 100,
-        // vec4<f32>(vec2<f32>(probe_texel) / f32(probe.width), 0, 0) * 0.1 + color
+        color
     );
 }
 
@@ -130,36 +115,36 @@ fn merge(probe_cell: vec2<u32>, probe_coord: vec2<u32>, ray_index: u32) -> vec4<
     for (var p: u32 = 0; p < 4; p++) {
         let prev_ray_index = prev_ray_index_start + p;
 
-        let ray_offset_coord = vec2<u32>(
+        let offset_coord = vec2<u32>(
             prev_ray_index % prev_width,
             prev_ray_index / prev_width,
         );
 
         TL += fetch_cascade(
             probe_cell,
-            vec2<i32>(0, 0),
-            ray_offset_coord,
+            vec2<u32>(0, 0),
+            offset_coord,
             dimensions,
             prev_width
         );
         TR += fetch_cascade(
             probe_cell,
-            vec2<i32>(1, 0),
-            ray_offset_coord,
+            vec2<u32>(1, 0),
+            offset_coord,
             dimensions,
             prev_width
         );
         BL += fetch_cascade(
             probe_cell,
-            vec2<i32>(0, 1),
-            ray_offset_coord,
+            vec2<u32>(0, 1),
+            offset_coord,
             dimensions,
             prev_width
         );
         BR += fetch_cascade(
             probe_cell,
-            vec2<i32>(1, 1),
-            ray_offset_coord,
+            vec2<u32>(1, 1),
+            offset_coord,
             dimensions,
             prev_width
         );
@@ -170,8 +155,7 @@ fn merge(probe_cell: vec2<u32>, probe_coord: vec2<u32>, ray_index: u32) -> vec4<
             vec2<f32>(probe_coord) -
             vec2<f32>(probe_cell / 2 * prev_width)
         ) / f32(prev_width)
-    ) * 0.5;
-    // let weight = vec2<f32>(0.25);
+    ) * 0.25;
 
     return mix(mix(TL, TR, weight.x), mix(BL, BR, weight.x), weight.y) * 0.25;
 }
@@ -179,14 +163,15 @@ fn merge(probe_cell: vec2<u32>, probe_coord: vec2<u32>, ray_index: u32) -> vec4<
 fn fetch_cascade(
     // Current probe's start coordinate
     probe_cell: vec2<u32>,
-    probe_offset: vec2<i32>,
-    ray_offset_coord: vec2<u32>,
+    probe_offset: vec2<u32>,
+    offset_coord: vec2<u32>,
     dimensions: vec2<u32>,
     prev_width: u32,
 ) -> vec4<f32> {
-    var prev_probe_cell = (vec2<i32>(probe_cell) - 1) / 2 + probe_offset;
-    prev_probe_cell = clamp(prev_probe_cell, vec2<i32>(0), vec2<i32>(dimensions / prev_width) - 1);
-    let prev_probe_coord = prev_probe_cell * i32(prev_width) + vec2<i32>(ray_offset_coord);
+    var prev_probe_cell = probe_cell / 2 + probe_offset;
+    // FIXME: Dirty hack to eliminate darkening near the right and bottom edges
+    prev_probe_cell = min(prev_probe_cell, dimensions / prev_width - 1);
+    let prev_probe_coord = prev_probe_cell * prev_width + offset_coord;
 
-    return textureLoad(tex_radiance_cascades_source, vec2<u32>(prev_probe_coord), 0);
+    return textureLoad(tex_radiance_cascades_source, prev_probe_coord, 0);
 }

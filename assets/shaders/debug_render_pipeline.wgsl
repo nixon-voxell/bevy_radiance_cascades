@@ -3,7 +3,7 @@
 @group(0) @binding(0) var screen_texture: texture_2d<f32>;
 // @group(0) @binding(0) var screen_texture: texture_2d<u32>;
 
-const SIZE: u32 = 64;
+const SIZE: u32 = 32;
 
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
