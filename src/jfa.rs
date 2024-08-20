@@ -1,5 +1,5 @@
 use bevy::{
-    core_pipeline::core_2d::graph::{Core2d, Node2d},
+    core_pipeline::core_2d::graph::Core2d,
     ecs::query::QueryItem,
     prelude::*,
     render::{

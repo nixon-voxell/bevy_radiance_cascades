@@ -3,10 +3,7 @@
 
 @compute
 @workgroup_size(8, 8, 1)
-fn jfa_mask(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
-    @builtin(local_invocation_id) local_id: vec3<u32>
-) {
+fn jfa_mask(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let base_coordinates = vec2<u32>(global_id.xy);
 
     let mask = textureLoad(tex_mask, base_coordinates, 0).r;

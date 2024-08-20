@@ -111,6 +111,9 @@ fn merge(probe_cell: vec2<u32>, probe_coord: vec2<u32>, ray_index: u32) -> vec4<
     var BL = vec4<f32>(0.0);
     var BR = vec4<f32>(0.0);
 
+    let probe_cell_i = vec2<i32>(probe_cell);
+    let probe_correcetion_offset = probe_cell_i - probe_cell_i / 2 * 2;
+
     let prev_ray_index_start = ray_index * 4;
     for (var p: u32 = 0; p < 4; p++) {
         let prev_ray_index = prev_ray_index_start + p;
@@ -121,57 +124,53 @@ fn merge(probe_cell: vec2<u32>, probe_coord: vec2<u32>, ray_index: u32) -> vec4<
         );
 
         TL += fetch_cascade(
-            probe_cell,
-            vec2<u32>(0, 0),
+            probe_cell_i,
+            probe_correcetion_offset + vec2<i32>(-1, -1),
             offset_coord,
             dimensions,
             prev_width
         );
         TR += fetch_cascade(
-            probe_cell,
-            vec2<u32>(1, 0),
+            probe_cell_i,
+            probe_correcetion_offset + vec2<i32>(0, -1),
             offset_coord,
             dimensions,
             prev_width
         );
         BL += fetch_cascade(
-            probe_cell,
-            vec2<u32>(0, 1),
+            probe_cell_i,
+            probe_correcetion_offset + vec2<i32>(-1, 0),
             offset_coord,
             dimensions,
             prev_width
         );
         BR += fetch_cascade(
-            probe_cell,
-            vec2<u32>(1, 1),
+            probe_cell_i,
+            probe_correcetion_offset + vec2<i32>(0, 0),
             offset_coord,
             dimensions,
             prev_width
         );
     }
 
-    let weight = 0.25 + (
-        (
-            vec2<f32>(probe_coord) -
-            vec2<f32>(probe_cell / 2 * prev_width)
-        ) / f32(prev_width)
-    ) * 0.25;
+    let weight = 0.75 - (
+        vec2<f32>(probe_correcetion_offset) * 0.5
+    );
 
     return mix(mix(TL, TR, weight.x), mix(BL, BR, weight.x), weight.y) * 0.25;
 }
 
 fn fetch_cascade(
     // Current probe's start coordinate
-    probe_cell: vec2<u32>,
-    probe_offset: vec2<u32>,
+    probe_cell: vec2<i32>,
+    probe_offset: vec2<i32>,
     offset_coord: vec2<u32>,
     dimensions: vec2<u32>,
     prev_width: u32,
 ) -> vec4<f32> {
     var prev_probe_cell = probe_cell / 2 + probe_offset;
-    // FIXME: Dirty hack to eliminate darkening near the right and bottom edges
-    // prev_probe_cell = min(prev_probe_cell, dimensions / prev_width - 1);
-    let prev_probe_coord = prev_probe_cell * prev_width + offset_coord;
+    prev_probe_cell = clamp(prev_probe_cell, vec2<i32>(0), vec2<i32>(dimensions / prev_width - 1));
 
+    let prev_probe_coord = vec2<u32>(prev_probe_cell) * prev_width + offset_coord;
     return textureLoad(tex_radiance_cascades_source, prev_probe_coord, 0);
 }

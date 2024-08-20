@@ -50,28 +50,28 @@ fn setup(
         },
         jfa::JfaPrepass,
         mask2d::Mask2dPrepass,
-        radiance_cascades::RadianceCascadesConfig::new(1, 128.0),
+        radiance_cascades::RadianceCascadesConfig::default(),
         // BloomSettings::default(),
         // SmaaSettings::default(),
     ));
 
     // Rect
-    // commands.spawn((
-    //     ColorMesh2dBundle {
-    //         mesh: Mesh2dHandle(meshes.add(Rectangle {
-    //             half_size: Vec2::new(20.0, 20.0),
-    //         })),
-    //         material: materials.add(Color::linear_rgba(0.0, 0.0, 1.0, 0.5)),
-    //         transform: Transform::from_xyz(-100.0, 100.0, 0.0),
-    //         ..default()
-    //     },
-    //     mask2d::Mask2d,
-    // ));
+    commands.spawn((
+        ColorMesh2dBundle {
+            mesh: Mesh2dHandle(meshes.add(Rectangle {
+                half_size: Vec2::new(40.0, 20.0),
+            })),
+            material: materials.add(Color::linear_rgba(0.0, 0.0, 4.0, 0.5)),
+            // transform: Transform::from_xyz(-100.0, 100.0, 0.0),
+            ..default()
+        },
+        mask2d::Mask2d,
+    ));
     // Circle
     commands.spawn((
         ColorMesh2dBundle {
-            mesh: Mesh2dHandle(meshes.add(Circle { radius: 10.0 })),
-            material: materials.add(Color::linear_rgba(2.0, 0.0, 0.0, 1.0)),
+            mesh: Mesh2dHandle(meshes.add(Circle { radius: 30.0 })),
+            material: materials.add(Color::linear_rgba(4.0, 2.0, 0.0, 1.0)),
             transform: Transform::from_xyz(0.0, 0.0, 0.1),
             ..default()
         },

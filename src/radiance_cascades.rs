@@ -14,11 +14,11 @@ use bevy::{
             binding_types::{sampler, texture_2d, texture_storage_2d, uniform_buffer},
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
             CachedComputePipelineId, CachedRenderPipelineId, ColorTargetState, ColorWrites,
-            ComputePassDescriptor, ComputePipelineDescriptor, DynamicUniformBuffer, FragmentState,
-            PipelineCache, RenderPassColorAttachment, RenderPassDescriptor,
+            ComputePassDescriptor, ComputePipelineDescriptor, DynamicUniformBuffer, FilterMode,
+            FragmentState, PipelineCache, RenderPassColorAttachment, RenderPassDescriptor,
             RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, ShaderStages,
             ShaderType, StorageTextureAccess, TextureDescriptor, TextureDimension, TextureFormat,
-            TextureSampleType, TextureUsages,
+            TextureSampleType, TextureUsages, TextureViewDescriptor,
         },
         renderer::{RenderContext, RenderDevice, RenderQueue},
         texture::{CachedTexture, TextureCache},
@@ -79,75 +79,6 @@ impl Plugin for RadianceCascadesPlugin {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
-pub struct RadianceCascadesLabel;
-
-/// Adding this to [bevy::prelude::Camera2d] will enable Radiance Cascades GI.
-#[derive(ExtractComponent, Component, Clone, Copy)]
-pub struct RadianceCascadesConfig {
-    /// Determines the number of directions in cascade 0 (angular resolution).
-    /// `angular_resolution = resolution_factor * 4`.
-    resolution_factor: u32,
-    /// Interval length of cascade 0 in pixel unit.
-    interval0: f32,
-}
-
-impl RadianceCascadesConfig {
-    /// Creates a new radiance cascades configuration with resolution
-    /// factor and interval0 clamped above 1.
-    pub fn new(mut resolution_factor: u32, mut interval0: f32) -> Self {
-        resolution_factor = u32::max(resolution_factor, 1);
-        interval0 = f32::max(interval0, 1.0);
-        Self {
-            resolution_factor,
-            interval0,
-        }
-    }
-
-    /// New config with resolution factor (clamped above 1).
-    pub fn with_resolution_factor(mut self, mut resolution_factor: u32) -> Self {
-        resolution_factor = u32::max(resolution_factor, 1);
-        self.resolution_factor = resolution_factor;
-        self
-    }
-
-    /// New config with interval length in pixel unit (clamped above 1).
-    pub fn with_interval(mut self, mut interval0: f32) -> Self {
-        interval0 = f32::max(interval0, 1.0);
-        self.interval0 = interval0;
-        self
-    }
-
-    /// Mutably set resolution factor (clamped above 1).
-    pub fn set_resolution_factor(&mut self, mut resolution_factor: u32) {
-        resolution_factor = u32::max(resolution_factor, 1);
-        self.resolution_factor = resolution_factor;
-    }
-
-    /// Mutably set interval length in pixel unit (clamped above 1).
-    pub fn set_interval(&mut self, mut interval0: f32) {
-        interval0 = f32::max(interval0, 1.0);
-        self.interval0 = interval0;
-    }
-
-    pub fn get_resolution_factor(&self) -> u32 {
-        self.resolution_factor
-    }
-
-    pub fn get_interval(&self) -> f32 {
-        self.interval0
-    }
-}
-
-impl Default for RadianceCascadesConfig {
-    fn default() -> Self {
-        Self {
-            resolution_factor: 1,
-            interval0: 2.0,
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct RadianceCascadesNode;
 
@@ -176,11 +107,13 @@ impl ViewNode for RadianceCascadesNode {
             Some(radiance_cascades_no_merge_pipeline),
             Some(radiance_cascades_merge_pipeline),
             Some(radiance_cascades_mipmap_pipeline),
+            Some(radiance_cascades_apply_pipeline),
         ) = (
             pipeline_cache.get_compute_pipeline(pipeline.dist_field_pipeline),
             pipeline_cache.get_compute_pipeline(pipeline.radiance_cascades_no_merge_pipeline),
             pipeline_cache.get_compute_pipeline(pipeline.radiance_cascades_merge_pipeline),
-            pipeline_cache.get_render_pipeline(pipeline.radiance_cascades_mipmap_pipeline),
+            pipeline_cache.get_compute_pipeline(pipeline.radiance_cascades_mipmap_pipeline),
+            pipeline_cache.get_render_pipeline(pipeline.radiance_cascades_apply_pipeline),
         )
         else {
             return Ok(());
@@ -193,6 +126,12 @@ impl ViewNode for RadianceCascadesNode {
         let size = view.main_texture().size();
         let workgroup_size =
             batch_count(UVec3::new(size.width, size.height, 1), UVec3::new(8, 8, 1));
+
+        let mipmap_size = textures.radiance_mipmap_texture.texture.size();
+        let mipmap_workgroup_size = batch_count(
+            UVec3::new(mipmap_size.width, mipmap_size.height, 1),
+            UVec3::new(8, 8, 1),
+        );
 
         {
             // Distance field
@@ -266,24 +205,55 @@ impl ViewNode for RadianceCascadesNode {
             }
         }
 
-        let post_process = view.post_process_write();
         {
             // Radiance cascades mipmap
-            let radiance_cascades_mipmap_bind_group =
+            let mut radiance_cascades_mipmap_pass = render_context
+                .command_encoder()
+                .begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("radiance_cascades_mipmap_pass"),
+                    timestamp_writes: None,
+                });
+
+            radiance_cascades_mipmap_pass.set_pipeline(radiance_cascades_mipmap_pipeline);
+            radiance_cascades_mipmap_pass.set_bind_group(
+                0,
+                &bind_groups.radiance_cascades_mipmap_bind_group,
+                &[buffer.probe_buffer_offsets[0]],
+            );
+
+            // Dispatch compute shader
+            radiance_cascades_mipmap_pass.dispatch_workgroups(
+                mipmap_workgroup_size.x,
+                mipmap_workgroup_size.y,
+                mipmap_workgroup_size.z,
+            );
+        }
+
+        let post_process = view.post_process_write();
+        {
+            // Radiance cascades apply
+            let radiance_cascades_apply_bind_group =
                 render_context.render_device().create_bind_group(
-                    Some("radiance_cascades_mipmap_bind_group"),
-                    &pipeline.radiance_cascades_mipmap_bind_group_layout,
+                    Some("radiance_cascades_apply_bind_group"),
+                    &pipeline.radiance_cascades_apply_bind_group_layout,
                     &BindGroupEntries::sequential((
-                        &buffer.probe_buffers,
                         post_process.source,
                         &pipeline.main_sampler,
-                        &textures.main_texture().default_view,
+                        &textures.radiance_mipmap_texture.texture.create_view(
+                            &TextureViewDescriptor {
+                                label: Some("radiance_mipmap_texture0"),
+                                // TODO: use mip level 1
+                                base_mip_level: 0,
+                                ..default()
+                            },
+                        ),
+                        &pipeline.radiance_sampler,
                     )),
                 );
-            let mut radiance_cascades_mipmap_render_pass = render_context
+            let mut radiance_cascades_apply_render_pass = render_context
                 .command_encoder()
                 .begin_render_pass(&RenderPassDescriptor {
-                    label: Some("radiance_cascades_mipmap_render_pass"),
+                    label: Some("radiance_cascades_apply_render_pass"),
                     color_attachments: &[Some(RenderPassColorAttachment {
                         view: post_process.destination,
                         resolve_target: None,
@@ -294,14 +264,13 @@ impl ViewNode for RadianceCascadesNode {
                     occlusion_query_set: None,
                 });
 
-            radiance_cascades_mipmap_render_pass.set_pipeline(radiance_cascades_mipmap_pipeline);
-            radiance_cascades_mipmap_render_pass.set_bind_group(
+            radiance_cascades_apply_render_pass.set_pipeline(radiance_cascades_apply_pipeline);
+            radiance_cascades_apply_render_pass.set_bind_group(
                 0,
-                &radiance_cascades_mipmap_bind_group,
-                // First probe
-                &[buffer.probe_buffer_offsets[0]],
+                &radiance_cascades_apply_bind_group,
+                &[],
             );
-            radiance_cascades_mipmap_render_pass.draw(0..3, 0..1);
+            radiance_cascades_apply_render_pass.draw(0..3, 0..1);
         }
 
         render_context.command_encoder().pop_debug_group();
@@ -315,11 +284,14 @@ struct RadianceCascadesPipeline {
     dist_field_bind_group_layout: BindGroupLayout,
     radiance_cascades_bind_group_layout: BindGroupLayout,
     radiance_cascades_mipmap_bind_group_layout: BindGroupLayout,
+    radiance_cascades_apply_bind_group_layout: BindGroupLayout,
     dist_field_pipeline: CachedComputePipelineId,
     radiance_cascades_no_merge_pipeline: CachedComputePipelineId,
     radiance_cascades_merge_pipeline: CachedComputePipelineId,
-    radiance_cascades_mipmap_pipeline: CachedRenderPipelineId,
+    radiance_cascades_mipmap_pipeline: CachedComputePipelineId,
+    radiance_cascades_apply_pipeline: CachedRenderPipelineId,
     main_sampler: Sampler,
+    radiance_sampler: Sampler,
 }
 
 impl FromWorld for RadianceCascadesPipeline {
@@ -332,6 +304,8 @@ impl FromWorld for RadianceCascadesPipeline {
         let radiance_cascades_shader = world.load_asset("shaders/radiance_cascades.wgsl");
         let radiance_cascades_mipmap_shader =
             world.load_asset("shaders/radiance_cascades_mipmap.wgsl");
+        let radiance_cascades_apply_shader =
+            world.load_asset("shaders/radiance_cascades_apply.wgsl");
 
         // Bind group layout
         let dist_field_bind_group_layout = render_device.create_bind_group_layout(
@@ -375,15 +349,34 @@ impl FromWorld for RadianceCascadesPipeline {
         let radiance_cascades_mipmap_bind_group_layout = render_device.create_bind_group_layout(
             "radiance_cascades_mipmap_bind_group_layout",
             &BindGroupLayoutEntries::sequential(
-                ShaderStages::FRAGMENT,
+                ShaderStages::COMPUTE,
                 (
                     // Probe width
                     uniform_buffer::<Probe>(true),
-                    // Main texture
-                    texture_2d(TextureSampleType::Float { filterable: true }),
-                    sampler(SamplerBindingType::Filtering),
                     // Cascade 0 texture
                     texture_2d(TextureSampleType::Float { filterable: false }),
+                    // Mipmap texture
+                    texture_storage_2d(
+                        RadianceCascadesTextures::CASCADE_FORMAT,
+                        StorageTextureAccess::WriteOnly,
+                    ),
+                ),
+            ),
+        );
+
+        let radiance_cascades_apply_bind_group_layout = render_device.create_bind_group_layout(
+            "radiance_cascades_apply_bind_group_layout",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::FRAGMENT,
+                (
+                    // Main texture
+                    texture_2d(TextureSampleType::Float { filterable: false }),
+                    // Main sampler
+                    sampler(SamplerBindingType::NonFiltering),
+                    // Mipmap texture
+                    texture_2d(TextureSampleType::Float { filterable: false }),
+                    // Mipmap sampler
+                    sampler(SamplerBindingType::NonFiltering),
                 ),
             ),
         );
@@ -420,12 +413,22 @@ impl FromWorld for RadianceCascadesPipeline {
             });
 
         let radiance_cascades_mipmap_pipeline =
-            pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
+            pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
                 label: Some("radiance_cascades_mipmap_pipeline".into()),
                 layout: vec![radiance_cascades_mipmap_bind_group_layout.clone()],
+                shader: radiance_cascades_mipmap_shader,
+                shader_defs: vec![],
+                entry_point: "radiance_cascades_mipmap".into(),
+                push_constant_ranges: vec![],
+            });
+
+        let radiance_cascades_apply_pipeline =
+            pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
+                label: Some("radiance_cascades_mipmap_pipeline".into()),
+                layout: vec![radiance_cascades_apply_bind_group_layout.clone()],
                 vertex: fullscreen_shader_vertex_state(),
                 fragment: Some(FragmentState {
-                    shader: radiance_cascades_mipmap_shader,
+                    shader: radiance_cascades_apply_shader,
                     shader_defs: vec![],
                     entry_point: "fragment".into(),
                     targets: vec![Some(ColorTargetState {
@@ -444,59 +447,20 @@ impl FromWorld for RadianceCascadesPipeline {
             dist_field_bind_group_layout,
             radiance_cascades_bind_group_layout,
             radiance_cascades_mipmap_bind_group_layout,
+            radiance_cascades_apply_bind_group_layout,
             dist_field_pipeline,
             radiance_cascades_no_merge_pipeline,
             radiance_cascades_merge_pipeline,
             radiance_cascades_mipmap_pipeline,
+            radiance_cascades_apply_pipeline,
             main_sampler: render_device.create_sampler(&SamplerDescriptor::default()),
+            radiance_sampler: render_device.create_sampler(&SamplerDescriptor {
+                label: Some("radiance_sampler"),
+                mipmap_filter: FilterMode::Linear,
+                ..default()
+            }),
         }
     }
-}
-
-#[derive(Component, Debug, Clone, Copy)]
-pub struct RadianceCascadesCount(usize);
-
-#[derive(ShaderType, Debug, Clone, Copy)]
-struct Probe {
-    pub width: u32,
-    /// Staring offset.
-    pub start: f32,
-    /// Range of ray.
-    pub range: f32,
-}
-
-#[derive(Component)]
-pub struct RadianceCascadesBuffer {
-    probe_buffers: DynamicUniformBuffer<Probe>,
-    probe_buffer_offsets: Vec<u32>,
-}
-
-#[derive(Component)]
-pub struct RadianceCascadesTextures {
-    pub dist_field_texture: CachedTexture,
-    pub radiance_cascades_texture0: CachedTexture,
-    pub radiance_cascades_texture1: CachedTexture,
-    // pub radiance_mipmap_texture: CachedTexture,
-    is_texture0: bool,
-}
-
-impl RadianceCascadesTextures {
-    pub const DIST_FIELD_FORMAT: TextureFormat = TextureFormat::R16Float;
-    pub const CASCADE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
-
-    pub fn main_texture(&self) -> &CachedTexture {
-        match self.is_texture0 {
-            true => &self.radiance_cascades_texture0,
-            false => &self.radiance_cascades_texture1,
-        }
-    }
-}
-
-#[derive(Component)]
-pub struct RadianceCascadesBindGroups {
-    dist_field_bind_group: BindGroup,
-    radiance_cascades_01_bind_group: BindGroup,
-    radiance_cascades_10_bind_group: BindGroup,
 }
 
 fn calculate_cascade_count(
@@ -546,13 +510,23 @@ fn calculate_cascade_count(
 
 fn prepare_radiance_cascades_textures(
     mut commands: Commands,
-    q_views: Query<(Entity, &ViewTarget, &RadianceCascadesCount)>,
+    q_views: Query<(
+        Entity,
+        &ViewTarget,
+        &RadianceCascadesCount,
+        &RadianceCascadesConfig,
+    )>,
     mut texture_cache: ResMut<TextureCache>,
     render_device: Res<RenderDevice>,
 ) {
-    for (entity, view, cascade_count) in q_views.iter() {
+    for (entity, view, cascade_count, cascade_config) in q_views.iter() {
         let mut size = view.main_texture().size();
         size.depth_or_array_layers = 1;
+
+        let mut half_size = size;
+        let probe_width = 1 << cascade_config.resolution_factor;
+        half_size.width = (half_size.width + probe_width - 1) / probe_width;
+        half_size.height = (half_size.height + probe_width - 1) / probe_width;
 
         let dist_field_texture = texture_cache.get(
             &render_device,
@@ -588,17 +562,27 @@ fn prepare_radiance_cascades_textures(
             cascade_texture_desc("radiance_cascade_1_texture"),
         );
 
-        // // let radiance_mipmap_texture =texture_cache.get(&render_device, TextureDescriptor {
-        // //     label: Some("radiance_mipmap_texture"),
-        // //     size: size / 2,
-        // //     mip_level_count: 1,
-        // //     sample_count
-        // });
+        let radiance_mipmap_texture = texture_cache.get(
+            &render_device,
+            TextureDescriptor {
+                label: Some("radiance_mipmap_texture"),
+                size,
+                mip_level_count: 2,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: RadianceCascadesTextures::CASCADE_FORMAT,
+                usage: TextureUsages::STORAGE_BINDING
+                    | TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+        );
 
         commands.entity(entity).insert(RadianceCascadesTextures {
             dist_field_texture,
             radiance_cascades_texture0,
             radiance_cascades_texture1,
+            radiance_mipmap_texture,
             is_texture0: cascade_count.0 % 2 != 0,
         });
     }
@@ -686,10 +670,144 @@ fn prepare_radiance_cascades_bind_groups(
             )),
         );
 
+        let radiance_cascades_mipmap_bind_group = render_device.create_bind_group(
+            "radiance_cascades_mipmap_bind_group",
+            &pipeline.radiance_cascades_mipmap_bind_group_layout,
+            &BindGroupEntries::sequential((
+                &buffer.probe_buffers,
+                &textures.main_texture().default_view,
+                &textures
+                    .radiance_mipmap_texture
+                    .texture
+                    .create_view(&TextureViewDescriptor {
+                        label: Some("radiance_cascades_mipmap1_texture_view"),
+                        base_mip_level: 1,
+                        ..default()
+                    }),
+            )),
+        );
+
         commands.entity(entity).insert(RadianceCascadesBindGroups {
             dist_field_bind_group,
             radiance_cascades_01_bind_group,
             radiance_cascades_10_bind_group,
+            radiance_cascades_mipmap_bind_group,
         });
     }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+pub struct RadianceCascadesLabel;
+
+/// Adding this to [bevy::prelude::Camera2d] will enable Radiance Cascades GI.
+#[derive(ExtractComponent, Component, Clone, Copy)]
+pub struct RadianceCascadesConfig {
+    /// Determines the number of directions in cascade 0 (angular resolution).
+    /// `angular_resolution = resolution_factor * 4`.
+    resolution_factor: u32,
+    /// Interval length of cascade 0 in pixel unit.
+    interval0: f32,
+}
+
+impl RadianceCascadesConfig {
+    /// Creates a new radiance cascades configuration with resolution
+    /// factor and interval0 clamped above 1.
+    pub fn new(mut resolution_factor: u32, mut interval0: f32) -> Self {
+        resolution_factor = u32::max(resolution_factor, 1);
+        interval0 = f32::max(interval0, 1.0);
+        Self {
+            resolution_factor,
+            interval0,
+        }
+    }
+
+    /// New config with resolution factor (clamped above 1).
+    pub fn with_resolution_factor(mut self, mut resolution_factor: u32) -> Self {
+        resolution_factor = u32::max(resolution_factor, 1);
+        self.resolution_factor = resolution_factor;
+        self
+    }
+
+    /// New config with interval length in pixel unit (clamped above 1).
+    pub fn with_interval(mut self, mut interval0: f32) -> Self {
+        interval0 = f32::max(interval0, 1.0);
+        self.interval0 = interval0;
+        self
+    }
+
+    /// Mutably set resolution factor (clamped above 1).
+    pub fn set_resolution_factor(&mut self, mut resolution_factor: u32) {
+        resolution_factor = u32::max(resolution_factor, 1);
+        self.resolution_factor = resolution_factor;
+    }
+
+    /// Mutably set interval length in pixel unit (clamped above 1).
+    pub fn set_interval(&mut self, mut interval0: f32) {
+        interval0 = f32::max(interval0, 1.0);
+        self.interval0 = interval0;
+    }
+
+    pub fn get_resolution_factor(&self) -> u32 {
+        self.resolution_factor
+    }
+
+    pub fn get_interval(&self) -> f32 {
+        self.interval0
+    }
+}
+
+impl Default for RadianceCascadesConfig {
+    fn default() -> Self {
+        Self {
+            resolution_factor: 1,
+            interval0: 2.0,
+        }
+    }
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+pub struct RadianceCascadesCount(usize);
+
+#[derive(ShaderType, Debug, Clone, Copy)]
+struct Probe {
+    pub width: u32,
+    /// Staring offset.
+    pub start: f32,
+    /// Range of ray.
+    pub range: f32,
+}
+
+#[derive(Component)]
+pub struct RadianceCascadesBuffer {
+    probe_buffers: DynamicUniformBuffer<Probe>,
+    probe_buffer_offsets: Vec<u32>,
+}
+
+#[derive(Component)]
+pub struct RadianceCascadesTextures {
+    pub dist_field_texture: CachedTexture,
+    pub radiance_cascades_texture0: CachedTexture,
+    pub radiance_cascades_texture1: CachedTexture,
+    pub radiance_mipmap_texture: CachedTexture,
+    is_texture0: bool,
+}
+
+impl RadianceCascadesTextures {
+    pub const DIST_FIELD_FORMAT: TextureFormat = TextureFormat::R16Float;
+    pub const CASCADE_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
+
+    pub fn main_texture(&self) -> &CachedTexture {
+        match self.is_texture0 {
+            true => &self.radiance_cascades_texture0,
+            false => &self.radiance_cascades_texture1,
+        }
+    }
+}
+
+#[derive(Component)]
+pub struct RadianceCascadesBindGroups {
+    dist_field_bind_group: BindGroup,
+    radiance_cascades_01_bind_group: BindGroup,
+    radiance_cascades_10_bind_group: BindGroup,
+    radiance_cascades_mipmap_bind_group: BindGroup,
 }
