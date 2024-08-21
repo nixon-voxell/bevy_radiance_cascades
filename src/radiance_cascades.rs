@@ -239,17 +239,11 @@ impl ViewNode for RadianceCascadesNode {
                     &BindGroupEntries::sequential((
                         post_process.source,
                         &pipeline.main_sampler,
-                        &textures.radiance_mipmap_texture.texture.create_view(
-                            &TextureViewDescriptor {
-                                label: Some("radiance_mipmap_texture0"),
-                                // TODO: use mip level 0
-                                base_mip_level: 1,
-                                ..default()
-                            },
-                        ),
+                        &textures.radiance_mipmap_texture.default_view,
                         &pipeline.radiance_sampler,
                     )),
                 );
+
             let mut radiance_cascades_apply_render_pass = render_context
                 .command_encoder()
                 .begin_render_pass(&RenderPassDescriptor {
@@ -374,9 +368,9 @@ impl FromWorld for RadianceCascadesPipeline {
                     // Main sampler
                     sampler(SamplerBindingType::NonFiltering),
                     // Mipmap texture
-                    texture_2d(TextureSampleType::Float { filterable: false }),
+                    texture_2d(TextureSampleType::Float { filterable: true }),
                     // Mipmap sampler
-                    sampler(SamplerBindingType::NonFiltering),
+                    sampler(SamplerBindingType::Filtering),
                 ),
             ),
         );
@@ -424,7 +418,7 @@ impl FromWorld for RadianceCascadesPipeline {
 
         let radiance_cascades_apply_pipeline =
             pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
-                label: Some("radiance_cascades_mipmap_pipeline".into()),
+                label: Some("radiance_cascades_apply_pipeline".into()),
                 layout: vec![radiance_cascades_apply_bind_group_layout.clone()],
                 vertex: fullscreen_shader_vertex_state(),
                 fragment: Some(FragmentState {
@@ -457,6 +451,7 @@ impl FromWorld for RadianceCascadesPipeline {
             radiance_sampler: render_device.create_sampler(&SamplerDescriptor {
                 label: Some("radiance_sampler"),
                 mipmap_filter: FilterMode::Linear,
+                mag_filter: FilterMode::Linear,
                 ..default()
             }),
         }
@@ -566,14 +561,12 @@ fn prepare_radiance_cascades_textures(
             &render_device,
             TextureDescriptor {
                 label: Some("radiance_mipmap_texture"),
-                size,
-                mip_level_count: 2,
+                size: half_size,
+                mip_level_count: 1,
                 sample_count: 1,
                 dimension: TextureDimension::D2,
                 format: RadianceCascadesTextures::CASCADE_FORMAT,
-                usage: TextureUsages::STORAGE_BINDING
-                    | TextureUsages::TEXTURE_BINDING
-                    | TextureUsages::COPY_DST,
+                usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             },
         );
@@ -676,14 +669,7 @@ fn prepare_radiance_cascades_bind_groups(
             &BindGroupEntries::sequential((
                 &buffer.probe_buffers,
                 &textures.main_texture().default_view,
-                &textures
-                    .radiance_mipmap_texture
-                    .texture
-                    .create_view(&TextureViewDescriptor {
-                        label: Some("radiance_cascades_mipmap1_texture_view"),
-                        base_mip_level: 1,
-                        ..default()
-                    }),
+                &textures.radiance_mipmap_texture.default_view,
             )),
         );
 

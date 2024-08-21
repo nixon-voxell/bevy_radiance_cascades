@@ -10,6 +10,5 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let main = textureSample(tex_main, sampler_main, in.uv);
     let radiance = textureSample(tex_radiance_mipmap, sampler_radiance_mipmap, in.uv);
 
-    // return main + radiance;
-    return radiance;
+    return main + radiance;
 }

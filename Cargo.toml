@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 bevy = { version = "0.14", features = ["file_watcher"] }
+rand = "0.8"
+bevy_motiongfx = { version = "0.1.0", git = "https://github.com/voxell-tech/bevy_motiongfx", default-features = false, features = ["common"] }
 
 # Enable a small amount of optimization in debug mode.
 [profile.dev]
