@@ -55,6 +55,30 @@ fn setup(
         // SmaaSettings::default(),
     ));
 
+    const COUNT: usize = 10;
+    const SPACING: f32 = 100.0;
+    const OFFSET: Vec3 = Vec3::new(
+        (COUNT as f32) * 0.5 * SPACING,
+        (COUNT as f32) * 0.5 * SPACING,
+        0.0,
+    );
+
+    for y in 0..COUNT {
+        for x in 0..COUNT {
+            commands.spawn((
+                ColorMesh2dBundle {
+                    mesh: Mesh2dHandle(meshes.add(Circle { radius: 10.0 })),
+                    material: materials.add(Color::linear_rgba(0.0, 0.0, 0.0, 1.0)),
+                    transform: Transform::from_translation(
+                        Vec3::new((x as f32) * SPACING, (y as f32) * SPACING, 0.0) - OFFSET,
+                    ),
+                    ..default()
+                },
+                mask2d::Mask2d,
+            ));
+        }
+    }
+
     // Rect
     commands.spawn((
         ColorMesh2dBundle {

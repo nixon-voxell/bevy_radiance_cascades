@@ -242,8 +242,8 @@ impl ViewNode for RadianceCascadesNode {
                         &textures.radiance_mipmap_texture.texture.create_view(
                             &TextureViewDescriptor {
                                 label: Some("radiance_mipmap_texture0"),
-                                // TODO: use mip level 1
-                                base_mip_level: 0,
+                                // TODO: use mip level 0
+                                base_mip_level: 1,
                                 ..default()
                             },
                         ),
